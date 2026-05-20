@@ -276,10 +276,23 @@ h1, h2, h3, h4, .section-title {
     padding: 1rem 1.2rem 0.85rem !important;
     cursor: pointer;
     transition: border-color 0.18s ease, background 0.18s ease !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
 }
 [data-testid="stFileUploadDropzone"]:hover {
     border-color: #D9B244 !important;
     background: linear-gradient(160deg, #FEFCF5 0%, #FAF2DC 100%) !important;
+}
+/* Uploaded state — solid border, slightly cooler bg */
+[data-testid="stFileUploadDropzone"]:has([data-testid="stFileUploadDeleteBtn"]) {
+    border: 1px solid #EAE3D8 !important;
+    background: #F9F7F4 !important;
+}
+[data-testid="stFileUploadDropzone"]:has([data-testid="stFileUploadDeleteBtn"]):hover {
+    border-color: #D0C8BC !important;
+    background: #F5F1EA !important;
 }
 /* Cloud icon — injected via ::before */
 [data-testid="stFileUploaderDropzoneInstructions"] {
@@ -335,7 +348,7 @@ h1, h2, h3, h4, .section-title {
     font-size: 0.75rem !important;
     border-radius: 5px !important;
     padding: 3px 14px !important;
-    margin-top: 7px !important;
+    margin: 7px auto 0 !important;
     cursor: pointer !important;
     transition: background 0.15s ease !important;
 }
@@ -512,7 +525,7 @@ def nav():
     st.markdown(
         '<div style="height:1px;background:linear-gradient(90deg,'
         'transparent,#EAE3D8 15%,#EAE3D8 85%,transparent);'
-        'margin:-1.6rem 0 1.4rem 0"></div>',
+        'margin:-0.6rem 0 1.4rem 0"></div>',
         unsafe_allow_html=True,
     )
 
@@ -528,7 +541,7 @@ def p1_upload():
 
     # ── Page title ─────────────────────────────────────────────────────────────
     st.markdown(
-        '<div style="margin:0.3rem 0 1.4rem 0">'
+        '<div style="margin:0.3rem 0 1.4rem 0;text-align:center">'
         '<div style="font-family:\'Cormorant Garamond\',Georgia,serif;'
         'font-size:2rem;font-weight:600;color:#1C1714;line-height:1;'
         'margin-bottom:5px">Upload Files</div>'
@@ -569,11 +582,10 @@ def p1_upload():
             st.markdown('<div class="upload-label">Existing Session File <span class="upload-required">*</span></div>', unsafe_allow_html=True)
             existing_file = st.file_uploader("Existing Session File", type=["xlsx"], key="p1_existing", label_visibility="collapsed")
 
-    # ── Settings row — SAME column structure as 3-card layout for pixel alignment
-    # Checkbox under card 1 · Tolerance under card 2 · Button under card 3
+    # ── Settings row 1 — Multiple Batches + Price Tolerance, centered together
     st.markdown('<div style="height:0.6rem"></div>', unsafe_allow_html=True)
 
-    _, col_cb, _, col_tol, _, col_btn, _ = st.columns([1, 2, 0.4, 2, 0.4, 2, 1])
+    _, col_cb, _, col_tol, _ = st.columns([2.2, 2, 0.4, 2, 2.2])
 
     with col_cb:
         st.markdown('<div style="padding-top:18px">', unsafe_allow_html=True)
@@ -603,8 +615,11 @@ def p1_upload():
     if batch_mode and not existing_file:
         all_uploaded = False
 
+    # ── Settings row 2 — Validate Orders button, right-aligned (under card 3)
+    st.markdown('<div style="height:0.4rem"></div>', unsafe_allow_html=True)
+    _, col_btn, _ = st.columns([5.8, 2, 1])
+
     with col_btn:
-        st.markdown('<div style="padding-top:18px">', unsafe_allow_html=True)
         validate_clicked = st.button(
             "Validate Orders →",
             type="primary",
@@ -619,7 +634,6 @@ def p1_upload():
                 'Upload all required files to continue</div>',
                 unsafe_allow_html=True,
             )
-        st.markdown('</div>', unsafe_allow_html=True)
 
     if validate_clicked:
         with st.spinner("Parsing files and validating orders..."):
