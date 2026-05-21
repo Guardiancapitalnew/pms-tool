@@ -1342,33 +1342,69 @@ def p2_results():
     )
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    # ── Download card ─────────────────────────────────────────────────────────
+    # ── Download badge — centered split badge ─────────────────────────────────
     st.markdown('<div style="height:1.2rem"></div>', unsafe_allow_html=True)
     alloc_bytes = write_allocation_file(allocation_df)
-
-    _, dl_col, _ = st.columns([1.5, 2, 4])
-    with dl_col:
-        st.markdown(
-            '<div style="background:#FAFAF8;border:1px solid #EAE3D8;'
-            'border-left:3px solid #D9B244;border-radius:10px;'
-            'padding:1.2rem 1.4rem 1rem">'
-            '<div style="font-family:\'Cormorant Garamond\',Georgia,serif;font-size:1.1rem;'
-            'font-weight:600;color:#1C1714;margin-bottom:3px">Orbis Allocation File</div>'
-            f'<div style="font-size:0.72rem;color:#B0A89E;font-family:\'DM Sans\',sans-serif;'
-            f'letter-spacing:0.4px;text-transform:uppercase;margin-bottom:1rem">'
-            f'{n_clients} rows · 19 columns · ready for upload</div>',
-            unsafe_allow_html=True,
-        )
-        st.download_button(
-            "⬇  Download orbis_allocation.xlsx",
-            data=alloc_bytes,
-            file_name="orbis_allocation.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-            key="dl_alloc",
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+    alloc_b64   = base64.b64encode(alloc_bytes).decode()
+    _dl_icon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M12 3v13"/><polyline points="7 11 12 16 17 11"/><line x1="5" y1="21" x2="19" y2="21"/></svg>'
+    components.html(f"""
+    <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ background: transparent; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }}
+    .dl-row {{
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        padding: 10px 0 8px 0;
+    }}
+    .dl-badge {{
+        display: inline-flex;
+        height: 42px;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid #EAE3D8;
+        text-decoration: none;
+        flex-shrink: 0;
+    }}
+    .dl-badge-label {{
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        background: #F0EBE3;
+        color: #4A4540;
+        font-size: 11px;
+        letter-spacing: 0.65px;
+        text-transform: uppercase;
+        font-weight: 500;
+        white-space: nowrap;
+        border-right: 1px solid #EAE3D8;
+    }}
+    .dl-badge-action {{
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 0 20px;
+        background: #D9B244;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 400;
+        white-space: nowrap;
+        transition: background 0.15s;
+    }}
+    .dl-badge:hover .dl-badge-action {{ background: #C4A03C; }}
+    </style>
+    <div class="dl-row">
+      <a class="dl-badge"
+         href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{alloc_b64}"
+         download="orbis_allocation.xlsx">
+        <span class="dl-badge-label">Orbis Allocation File</span>
+        <span class="dl-badge-action">{_dl_icon} Download orbis_allocation.xlsx</span>
+      </a>
+    </div>
+    """, height=72)
 
     # ── Bottom action row ─────────────────────────────────────────────────────
     st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
