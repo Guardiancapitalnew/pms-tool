@@ -115,17 +115,17 @@ def validate_orders(
             elif held == 0:
                 sell_status.append("RED")
                 sell_reason.append(f"Client holds 0 units of {row['Ticker']}")
-                sell_context.append("Units held: 0")
+                sell_context.append("0 Units")
             elif held < qty:
                 sell_status.append("RED")
                 sell_reason.append(
                     f"Insufficient units - holds {int(held):,}, needs {int(qty):,}"
                 )
-                sell_context.append(f"Units held: {int(held):,}")
+                sell_context.append(f"{int(held):,} Units")
             else:
                 sell_status.append("GREEN")
                 sell_reason.append("")
-                sell_context.append(f"Units held: {int(held):,}")
+                sell_context.append(f"{int(held):,} Units")
 
         # Map results back to original index order
         sell_results = pd.DataFrame({

@@ -827,10 +827,10 @@ def p1_validate():
 
     # ── Build editor DataFrame - Context before Reason ────────────────────────
     context_col = "Context" if "Context" in vdf.columns else None
-    base_cols = ["S.No", "Client", "Ticker", "Direction", "Qty", "Ref Price", "Status"]
+    base_cols = ["S.No", "Client", "Ticker", "Direction", "Qty"]
     if context_col:
-        base_cols.append(context_col)   # Context sits before Reason
-    base_cols.append("Reason")
+        base_cols.append(context_col)   # Context sits immediately right of Qty
+    base_cols += ["Ref Price", "Status", "Reason"]
     editor_df = vdf[base_cols].copy()
     if context_col:
         editor_df.rename(columns={"Context": "Units Held / Cash"}, inplace=True)
