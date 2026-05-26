@@ -385,8 +385,8 @@ h1, h2, h3, h4, .section-title {
     min-height: unset !important;
 }
 [data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"] {
-    min-height: 34px !important;
-    max-height: 34px !important;
+    min-height: 42px !important;
+    max-height: 42px !important;
     padding: 0 !important;
     border: 1.5px solid #D5CFC7 !important;
     background: #F0EDE8 !important;
@@ -415,7 +415,7 @@ h1, h2, h3, h4, .section-title {
     border: none !important;
     box-shadow: none !important;
     width: 100% !important;
-    height: 34px !important;
+    height: 42px !important;
     cursor: pointer !important;
     position: relative !important;
 }
@@ -427,7 +427,7 @@ h1, h2, h3, h4, .section-title {
     color: #958F87 !important;
     position: absolute !important;
     left: 50% !important;
-    top: 50% !important;
+    top: calc(50% - 2px) !important;
     transform: translate(-50%, -50%) !important;
     white-space: nowrap !important;
 }
