@@ -11,6 +11,17 @@ CHARGE_COLS = [
     "TurnoverTax", "OtherCharges", "GST",
 ]
 
+# Rounding precision per output column (last client always gets full precision residual)
+_CHARGE_PRECISION = {
+    "InputBrokerage":    2,
+    "InputSTT":          2,
+    "InputStampDuty":    2,
+    "InputSEBIChrg":     2,
+    "InputTurnOver":     4,
+    "InputOtherCharges": 2,
+    "InputGST":          2,
+}
+
 ALLOCATION_COLUMNS = [
     "S.No", "Client Name", "CustomerNo", "TradeDate", "Exchange Type",
     "Settlement No", "ISIN No", "Buy/ Sell", "Input Quantity",
@@ -120,7 +131,8 @@ def allocate_costs(
                     )
                     rec[out_col] = broker_total - already_allocated  # full precision
                 else:
-                    rec[out_col] = round(w * broker_total, 2)
+                    precision = _CHARGE_PRECISION.get(out_col, 2)
+                    rec[out_col] = round(w * broker_total, precision)
 
             # Net Amount
             broker_net = float(broker_row["NetAmount"])

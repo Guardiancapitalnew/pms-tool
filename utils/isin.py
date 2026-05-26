@@ -175,6 +175,56 @@ def lookup_isin_by_name(company_name: str, db: pd.DataFrame) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Bulk update from uploaded CSV
+# ---------------------------------------------------------------------------
+
+def bulk_update_isin_database(file) -> tuple[int, int]:
+    """Add new ISIN entries from an uploaded CSV file.
+
+    Reads Name, BSE Code, NSE Code, ISIN Code columns from the file.
+    Skips entries where ISIN Code already exists in the database.
+    Extra columns in the uploaded file (e.g. financial data) are ignored.
+
+    Args:
+        file: BytesIO or Streamlit UploadedFile (.csv)
+
+    Returns:
+        (added, skipped) counts
+    """
+    from io import BytesIO as _BytesIO
+    content = file.read() if hasattr(file, "read") else file
+    new_df = pd.read_csv(_BytesIO(content), dtype=str, keep_default_na=False)
+    new_df.columns = [c.strip() for c in new_df.columns]
+
+    required = ["Name", "BSE Code", "NSE Code", "ISIN Code"]
+    missing = [c for c in required if c not in new_df.columns]
+    if missing:
+        raise ValueError(
+            f"Uploaded file is missing column(s): {missing}. "
+            f"Expected: Name, BSE Code, NSE Code, ISIN Code."
+        )
+
+    new_df = new_df[required].copy()
+    for col in new_df.columns:
+        new_df[col] = new_df[col].str.strip()
+
+    # Drop rows with blank ISIN
+    new_df = new_df[new_df["ISIN Code"].str.len() > 0].reset_index(drop=True)
+
+    existing_db = load_isin_database()
+    existing_isins = set(existing_db["ISIN Code"].str.strip().str.upper())
+
+    to_add = new_df[~new_df["ISIN Code"].str.upper().isin(existing_isins)]
+    skipped = len(new_df) - len(to_add)
+
+    if not to_add.empty:
+        combined = pd.concat([existing_db, to_add], ignore_index=True)
+        combined.to_csv(DB_PATH, index=False)
+
+    return len(to_add), skipped
+
+
+# ---------------------------------------------------------------------------
 # Add new entry
 # ---------------------------------------------------------------------------
 

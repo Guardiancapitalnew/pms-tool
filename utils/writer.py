@@ -95,6 +95,11 @@ CURRENCY_COLS = {
     "InputNetAmount", "InputNetRate",
 }
 
+# Per-column Excel number format - overrides the default "0.00" where needed
+_COL_NUMBER_FORMAT = {
+    "InputTurnOver": "0.0000",
+}
+
 HEADER_FILL    = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
 HEADER_FONT    = Font(bold=True, color="FFFFFF", size=10)
 CP_BLANK_FILL  = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")  # light amber
@@ -135,7 +140,7 @@ def write_allocation_file(allocation_df: pd.DataFrame) -> bytes:
             cell = ws.cell(row=row_idx, column=col_idx, value=val)
 
             if col_name in CURRENCY_COLS and val is not None:
-                cell.number_format = "0.00"
+                cell.number_format = _COL_NUMBER_FORMAT.get(col_name, "0.00")
             elif col_name == "TradeDate" and val is not None:
                 cell.number_format = "DD-MMM-YYYY"
             elif col_name == "Settlement No":

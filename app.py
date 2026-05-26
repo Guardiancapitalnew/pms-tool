@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from utils.isin import load_isin_database, add_isin_entry
+from utils.isin import load_isin_database, add_isin_entry, bulk_update_isin_database
 from utils.reader import (
     read_research_file, read_bank_book, read_scrip_wise_report,
     read_session_file,
@@ -341,20 +341,27 @@ h1, h2, h3, h4, .section-title {
 /* File row - icon + name centered; × is out of flow so it doesn't offset centering */
 [data-testid="stFileUploaderFile"] {
     display: flex !important;
-    align-items: center !important;
+    align-items: flex-start !important;
     justify-content: center !important;
     gap: 8px !important;
     padding: 0 1.2rem !important;
     font-family: 'DM Sans', sans-serif !important;
     font-size: 0.82rem !important;
     color: #4A4540 !important;
+    min-width: 0 !important;
+    width: 100% !important;
 }
-/* File name + size block */
+/* File name + size block - wraps long names inside the card */
 [data-testid="stFileUploaderFileName"] {
     font-family: 'DM Sans', sans-serif !important;
     font-size: 0.82rem !important;
     font-weight: 400 !important;
     color: #1C1714 !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    text-align: left !important;
+    min-width: 0 !important;
+    flex: 1 !important;
 }
 [data-testid="stFileUploaderFileSize"] {
     font-family: 'DM Sans', sans-serif !important;
@@ -372,6 +379,67 @@ h1, h2, h3, h4, .section-title {
 [data-testid="stFileUploaderDeleteBtn"] button:hover {
     color: #dc2626 !important;
 }
+/* ── Update ISIN Database - file uploader disguised as a muted button ─── */
+/* Class stamped by JS directly onto the stFileUploader element */
+[data-testid="stFileUploader"].isin-uploader-btn {
+    min-height: unset !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"] {
+    min-height: 34px !important;
+    max-height: 34px !important;
+    padding: 0 !important;
+    border: 1.5px solid #D5CFC7 !important;
+    background: #F0EDE8 !important;
+    border-radius: 6px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: background 0.18s ease, border-color 0.18s ease !important;
+    cursor: pointer !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"]:hover {
+    background: linear-gradient(180deg, #FEFCF6 0%, #F9F3E3 100%) !important;
+    border-color: #D9B244 !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzoneInstructions"] {
+    display: none !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"] > span {
+    width: 100% !important;
+    display: flex !important;
+    justify-content: center !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"] button {
+    font-size: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    width: 100% !important;
+    height: 34px !important;
+    cursor: pointer !important;
+    position: relative !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"] button::after {
+    content: "Update ISIN Database" !important;
+    font-size: 0.8rem !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 400 !important;
+    color: #958F87 !important;
+    position: absolute !important;
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    white-space: nowrap !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDropzone"]:hover button::after {
+    color: #7A5F1A !important;
+}
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderFile"],
+[data-testid="stFileUploader"].isin-uploader-btn [data-testid="stFileUploaderDeleteBtn"],
+[data-testid="stFileUploader"].isin-uploader-btn > div:last-of-type {
+    display: none !important;
+}
+
 /* Cloud icon - injected via ::before */
 [data-testid="stFileUploaderDropzoneInstructions"] {
     font-family: 'DM Sans', sans-serif !important;
@@ -1445,16 +1513,67 @@ def isin_page():
     isin_db = get_isin_db()
 
     # ── Header ────────────────────────────────────────────────────────────────
-    st.markdown(
-        f'<div style="margin:0.3rem 0 1.4rem 0">'
-        f'<div style="font-family:\'Cormorant Garamond\',Georgia,serif;'
-        f'font-size:2rem;font-weight:600;color:#1C1714;line-height:1;margin-bottom:5px">'
-        f'ISIN Database</div>'
-        f'<div style="font-size:0.83rem;color:#958F87;font-family:\'DM Sans\',sans-serif;'
-        f'font-weight:300">{len(isin_db):,} listed companies · NSE + BSE universe</div>'
-        f'</div>',
-        unsafe_allow_html=True,
+    hdr_col, btn_col = st.columns([5, 1])
+    with hdr_col:
+        st.markdown(
+            f'<div style="margin:0.3rem 0 1.4rem 0">'
+            f'<div style="font-family:\'Cormorant Garamond\',Georgia,serif;'
+            f'font-size:2rem;font-weight:600;color:#1C1714;line-height:1;margin-bottom:5px">'
+            f'ISIN Database</div>'
+            f'<div style="font-size:0.83rem;color:#958F87;font-family:\'DM Sans\',sans-serif;'
+            f'font-weight:300">{len(isin_db):,} listed companies · NSE + BSE universe</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with btn_col:
+        st.markdown('<div style="padding-top:0.4rem"></div>', unsafe_allow_html=True)
+        bulk_file = st.file_uploader(
+            "Update ISIN Database",
+            type=["csv"],
+            key=f"isin_bulk_{st.session_state.get('isin_bulk_key', 0)}",
+            label_visibility="collapsed",
+        )
+    # JS: stamp isin-uploader-btn class directly onto the uploader element so
+    # CSS can target it (wrapper divs don't work — Streamlit renders siblings)
+    components.html(
+        """
+        <script>
+        (function() {
+            function stamp() {
+                try {
+                    var doc = window.parent.document;
+                    var uploaders = doc.querySelectorAll('[data-testid="stFileUploader"]');
+                    if (!uploaders.length) { setTimeout(stamp, 150); return; }
+                    var last = uploaders[uploaders.length - 1];
+                    if (!last.classList.contains('isin-uploader-btn')) {
+                        last.classList.add('isin-uploader-btn');
+                    }
+                } catch(e) {}
+            }
+            stamp();
+            // Re-stamp after Streamlit reruns (MutationObserver on body)
+            try {
+                var obs = new MutationObserver(stamp);
+                obs.observe(window.parent.document.body, { childList: true, subtree: true });
+            } catch(e) {}
+        })();
+        </script>
+        """,
+        height=0,
     )
+
+    if bulk_file is not None:
+        try:
+            added, skipped = bulk_update_isin_database(bulk_file)
+            get_isin_db.clear()
+            st.session_state.isin_bulk_key = st.session_state.get("isin_bulk_key", 0) + 1
+            if added > 0:
+                st.toast(f"✓ {added:,} new entries added. {skipped:,} already existed.")
+            else:
+                st.toast(f"All {skipped:,} entries already exist. Nothing added.")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
 
     # ── Search bar ────────────────────────────────────────────────────────────
     search_col, count_col = st.columns([4, 1])
