@@ -871,6 +871,7 @@ def p1_validate():
             display_df.style
             .apply(_row_style, axis=1)
             .format({"Status": lambda v: "READY" if v == "GREEN" else "BLOCKED"})
+            .set_properties(**{"white-space": "normal"})
         )
 
         st.dataframe(
@@ -1141,7 +1142,7 @@ def p1_export():
         'Broker File Preview</div>',
         unsafe_allow_html=True,
     )
-    st.dataframe(broker_file_df, use_container_width=True, hide_index=True)
+    st.dataframe(broker_file_df.style.set_properties(**{"white-space": "normal"}), use_container_width=True, hide_index=True)
 
     # ── Bottom action row ─────────────────────────────────────────────────────
     st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
@@ -1354,7 +1355,7 @@ def p2_results():
         .rename(columns={"ISIN No": "ISIN", "Buy/ Sell": "Direction",
                          "Total_Qty": "Total Qty", "Total_Net": "Total Net (₹)"})
     )
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary.style.set_properties(**{"white-space": "normal"}), use_container_width=True, hide_index=True)
 
     # ── Download badge - centered split badge ─────────────────────────────────
     st.markdown('<div style="height:1.2rem"></div>', unsafe_allow_html=True)
@@ -1524,7 +1525,7 @@ def isin_page():
             unsafe_allow_html=True,
         )
 
-    st.dataframe(display_db, use_container_width=True, hide_index=True, height=400)
+    st.dataframe(display_db.style.set_properties(**{"white-space": "normal"}), use_container_width=True, hide_index=True, height=400)
 
     # ── Add New Entry ─────────────────────────────────────────────────────────
     st.markdown(
