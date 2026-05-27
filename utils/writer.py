@@ -5,7 +5,7 @@ from io import BytesIO
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, numbers
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
 from openpyxl.utils import get_column_letter
 
 
@@ -100,15 +100,19 @@ _COL_NUMBER_FORMAT = {
     "InputTurnOver": "0.00",
 }
 
-HEADER_FILL    = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-HEADER_FONT    = Font(bold=True, color="FFFFFF", size=10)
+HEADER_FONT    = Font(name="Aptos Narrow", bold=True, size=11)
+DATA_FONT      = Font(name="Aptos Narrow", size=11)
 CP_BLANK_FILL  = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")  # light amber
+
+_THIN_SIDE     = Side(style="thin")
+_CELL_BORDER   = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
 
 
 def write_allocation_file(allocation_df: pd.DataFrame) -> bytes:
     """Write the Orbis allocation file with formatting.
 
-    - Bold white-on-blue header row
+    - Header: bold Aptos Narrow 11, no fill, centered, thin border
+    - Data: Aptos Narrow 11, centered (Client Name left), thin border
     - Number format '0.00' on all charge and net columns
     - Date format on TradeDate
     - Auto-width columns
@@ -126,18 +130,21 @@ def write_allocation_file(allocation_df: pd.DataFrame) -> bytes:
 
     cols = list(allocation_df.columns)
 
-    # Header row
+    # Header row — bold Aptos Narrow, no fill, full border, centered
     for col_idx, col_name in enumerate(cols, start=1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
-        cell.font = HEADER_FONT
-        cell.fill = HEADER_FILL
+        cell.font      = HEADER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border    = _CELL_BORDER
 
     # Data rows
     for row_idx, (_, row) in enumerate(allocation_df.iterrows(), start=2):
         for col_idx, col_name in enumerate(cols, start=1):
             val = row[col_name]
             cell = ws.cell(row=row_idx, column=col_idx, value=val)
+
+            cell.font   = DATA_FONT
+            cell.border = _CELL_BORDER
 
             if col_name in CURRENCY_COLS and val is not None:
                 cell.number_format = _COL_NUMBER_FORMAT.get(col_name, "0.00")
