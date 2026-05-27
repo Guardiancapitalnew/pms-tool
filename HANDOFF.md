@@ -15,7 +15,7 @@ buy/sell orders. This tool validates, processes, and allocates those orders.
 
 **No login. No database. No server state. Files in → processed files out.**
 
-The single exception: `data/isin_database.csv` persists on disk (5,324 listed companies).
+The single exception: `data/isin_database.csv` persists on disk (5,324+ listed companies).
 
 ---
 
@@ -64,9 +64,11 @@ pms_tool/
 ├── app.py                    # Entire UI — Streamlit entry point
 ├── CLAUDE.md                 # Rules for Claude Code (git protocol, conventions, specs)
 ├── HANDOFF.md                # This file
+├── CONVERSATION_HISTORY.md   # Design history, decisions, what was tried/rejected
+├── HOW_TO_HANDOFF.md         # Guide for starting a new LLM session
 ├── requirements.txt          # Pinned dependencies
 ├── data/
-│   └── isin_database.csv     # 5,324 rows: Name | BSE Code | NSE Code | ISIN Code
+│   └── isin_database.csv     # 5,324+ rows: Name | BSE Code | NSE Code | ISIN Code
 ├── assets/
 │   └── logo_transparent.png  # Guardian Capital logo (top-left nav)
 ├── part1/
@@ -80,7 +82,7 @@ pms_tool/
 ├── utils/
 │   ├── reader.py             # All input file readers
 │   ├── writer.py             # Excel writers (session file + allocation file)
-│   └── isin.py               # ISIN DB load/lookup/add
+│   └── isin.py               # ISIN DB load/lookup/add/bulk-update
 └── tests/
     ├── conftest.py
     ├── test_validator.py
@@ -115,7 +117,10 @@ Get-NetTCPConnection -LocalPort 8502 -State Listen | Select-Object -ExpandProper
 ```
 
 ### GitHub repo
-`https://github.com/yathnagda1999/pms-tool`
+`https://github.com/yathnagada1999/pms-tool`
+
+### After pulling new code
+Restart the Streamlit server. Code changes to `.py` files only take effect on restart.
 
 ---
 
@@ -141,6 +146,10 @@ st.session_state.broker_file_df
 st.session_state.allocation_df
 st.session_state.p2_not_exec      # list of not-executed ISINs
 st.session_state.p2_unexpected    # list of unexpected ISINs in broker reply
+
+# Widget values (persist across steps)
+st.session_state.p1_tolerance     # float — tolerance % set in Step 1, read in Step 2
+st.session_state.isin_bulk_msg    # tuple (type, text) for bulk update result message
 ```
 
 ### Navigation flow
@@ -176,16 +185,17 @@ Part 2:
 | Label | `#B0A89E` | Section labels (uppercase, tracked) |
 | Green | `#16a34a` | Ready/pass states |
 | Red | `#dc2626` | Blocked/fail states |
+| Amber | `#FEF3C7` | CP Code blank cell highlight in session file |
 
 ### Fonts
 - **Cormorant Garamond** (serif, 600) — all headings, section titles, large numbers
 - **DM Sans** (sans-serif, 300/400/500) — all body text, labels, buttons
+- **Aptos Narrow** (size 11) — all cells in the generated allocation Excel file
 
 ### Component patterns
 
 #### Split badge (used for status + download buttons)
 Two-part box: left side = label (lighter bg), right side = value/action (darker bg).
-Separated by a 1px border. Used for: Orders Ready/Blocked, Stocks/Clients, file downloads.
 ```html
 <div style="display:flex; border:1px solid ...; border-radius:8px; overflow:hidden; height:38px">
   <div style="padding:0 14px; ... background:rgba(...)">LABEL</div>
@@ -193,35 +203,24 @@ Separated by a 1px border. Used for: Orders Ready/Blocked, Stocks/Clients, file 
 </div>
 ```
 
-#### Section headers
-Centered (Part 1 Validate, Part 2 Upload/Results) or left-aligned (Part 1 Upload).
-```python
-st.markdown(
-    '<div style="margin:0.3rem 0 1.4rem 0; text-align:center">'
-    '<div style="font-family:Cormorant Garamond; font-size:2rem; ...">Title</div>'
-    '<div style="font-size:0.83rem; color:#958F87; ...">Subtitle</div>'
-    '</div>', unsafe_allow_html=True
-)
-```
-
 #### Upload cards
 Custom CSS makes Streamlit's `st.file_uploader` look like cards:
 - Empty state: dashed gold border, cloud upload icon (SVG injected via `::before`)
 - Uploaded state: solid border, file name centered, × delete button top-right
-- `min-height: 140px` on dropzone so all cards are consistent height
+- `min-height: 140px` on dropzone, consistent height across all cards
+- Filename text: `white-space: normal; word-break: break-word; flex: 1; min-width: 0`
 
 #### Row-colour table (validation)
 Uses pandas Styler passed to `st.dataframe` — renders as HTML (not canvas), so CSS applies.
 Green rows: `rgba(22,163,74,0.07)` bg. Red rows: `rgba(220,38,38,0.06)` bg.
-`set_properties(white-space: normal)` added for text wrapping.
 
 #### Split table (validate orders)
-Two side-by-side columns: narrow (0.7) for checkboxes only, wide (8.3) for the styled table.
-Both auto-height so page scrolls — keeps rows visually in sync without JS.
+Two side-by-side columns: narrow (0.7) for checkboxes only, wide (8.3) for styled table.
+Both auto-height so page scrolls — keeps rows in sync without JS.
 
-#### Download via data-URI (Part 1 Export)
-`st.download_button` only downloads one file. For "Download Both", used `components.html`
-with data-URI `<a download>` anchors + JS to click both with 400ms gap:
+#### Download via data-URI (Part 1 Export + Part 2)
+`st.download_button` only downloads one file. Used `components.html` with data-URI
+`<a download>` anchors + JS to click both with 400ms gap:
 ```javascript
 var badges = document.querySelectorAll('a.dl-badge');
 badges[0].click();
@@ -230,7 +229,7 @@ setTimeout(function(){ badges[1].click(); }, 400);
 
 #### Stepper
 Centered horizontal pill stepper. Active step: dark fill + gold text. Done steps: muted.
-Connector lines turn gold when done. Built in pure HTML/CSS, rendered via `st.markdown`.
+Connector lines turn gold when done. Built in pure HTML/CSS via `st.markdown`.
 
 ---
 
@@ -242,17 +241,34 @@ Connector lines turn gold when done. Built in pure HTML/CSS, rendered via `st.ma
 | `load_isin_database()` | Reads `data/isin_database.csv`. Decorated with `@st.cache_data` in app.py. |
 | `build_isin_index(db)` | Returns `{uppercase_ticker: isin}` dict for O(1) lookups. BSE first, NSE overwrites (NSE priority). |
 | `lookup_isin(ticker, db, _index)` | Returns ISIN string or None. Uses index if provided, else DataFrame scan. |
+| `lookup_isin_by_name(company_name, db)` | Fuzzy name match — last resort when ticker is a full company name. Returns ISIN or None. |
 | `add_isin_entry(name, nse, bse, isin)` | Appends row to CSV, re-saves. Call `get_isin_db.clear()` after to reset cache. |
+| `bulk_update_isin_database(file)` | Reads uploaded CSV, skips existing ISINs, appends new rows. Returns `(added, skipped)`. |
+
+**ISIN lookup priority in validator.py**:
+1. Scrip-wise report — exact Scrip Name match (case-insensitive)
+2. ISIN database index — NSE Code, then BSE Code fallback
+3. `lookup_isin_by_name()` — fuzzy company name match (last resort)
 
 ### `utils/reader.py`
 | Function | Returns |
 |----------|---------|
-| `read_research_file(file)` | DataFrame — all research order columns |
+| `read_research_file(file)` | DataFrame — all research order columns. Client names stripped of trailing dash suffixes (e.g. "-1", "- New"). |
 | `read_bank_book(file)` | `dict[OFIN str → balance float]` |
 | `read_scrip_wise_report(file)` | DataFrame — OFIN, Scrip Name, ISIN, Quantity |
 | `read_session_file(file)` | DataFrame — 10 SESSION_COLUMNS |
 | `read_broker_reply_ambit(file)` | Raw Ambit DataFrame |
 | `read_broker_reply_incred(file)` | Raw InCred DataFrame (numeric casting applied) |
+
+**All readers accept both `.xls` and `.xlsx`** — format auto-detected from magic bytes.
+
+**Research file**: Handles flexible sheet names (tries "Orders" first, then best-match scan).
+Handles flexible column names via alias dict (e.g. "Stock" = "Ticker", "Action" = "Direction").
+
+**Client name normalisation** in `read_research_file`: strips trailing dash suffixes:
+```python
+.str.replace(r'\s*-\s*\w+\s*$', '', regex=True)
+```
 
 **Critical**: `file.seek(0)` is called inside both broker reply readers between the
 openpyxl sheet-check and the `pd.read_excel` call. Without this, `pd.read_excel` reads
@@ -263,23 +279,32 @@ an empty stream. Do not remove.
 |----------|---------|
 | `to_excel_bytes(df, sheet_name)` | Generic: df → bytes |
 | `write_session_file(session_df)` | Session file with bold headers + amber highlight on blank CP Code cells (`#FEF3C7`) |
-| `write_allocation_file(allocation_df)` | Blue header row + number format 0.00 on charge cols + date format on TradeDate |
+| `write_allocation_file(allocation_df)` | Formatted allocation file — see below |
+
+**`write_allocation_file` formatting**:
+- Font: Aptos Narrow, size 11, all cells (header + data)
+- Header: bold, no background fill, center+center alignment, thin border
+- Data: center+center alignment (except Client Name: left+center), thin border
+- Charge columns: number format `"0.00"` (2dp display)
+- InputTurnOver: number format `"0.00"` (displays 2dp; full precision stored in cell)
+- TradeDate: number format `"DD-MM-YYYY"`
+- Settlement No: always blank (value set to None)
 
 ### `part1/validator.py` — `validate_orders()`
 Returns research_df enriched with: `ISIN`, `Status` (GREEN/RED), `Reason`, `Context`.
 
-**Sell logic**: merge research rows with scrip_df on (OFIN, Ticker upper). No match → RED.
-Zero held → RED. Held < ordered → RED with "Insufficient units - holds X, needs Y". Else GREEN.
+**Sell logic**: Merge on (OFIN, ISIN) — ISIN-based, format-agnostic.
+No match → RED. Zero held → RED. Held < ordered → RED "Insufficient units - holds X, needs Y".
 Context format: `"X Units"` (e.g. `"200 Units"`).
 
-**Buy logic**: look up OFIN in bank_book. Deduct committed cash from existing session.
+**Buy logic**: Look up OFIN in bank_book. Deduct committed cash from existing session.
 `required = qty × ref_price × (1 + tolerance/100)`. Not in bank book → RED.
 Negative available → RED. Available < required → RED with cash amounts.
 Context format: `"Available: ₹X"`.
 
-**ISIN lookup order**: scrip_df first (by Ticker = Scrip Name, uppercase), then isin_db via index.
+**ISIN lookup order**: scrip_df → isin_db (NSE/BSE code) → `lookup_isin_by_name()` (fuzzy).
 
-**Committed cash** = sum(Qty × Ref Price) for BUY rows in `existing_session_df`, grouped by OFIN.
+**Committed cash** = sum(Qty × Ref Price) for BUY rows in `existing_session_df`, by OFIN.
 Sell rows in existing session do NOT reduce available holdings.
 
 ### `part1/session.py` — `build_session_file()`
@@ -308,16 +333,15 @@ Match key: `ISIN + Direction` (uppercase). Returns:
 - `not_executed` — ISINs in session but not in broker reply
 - `unexpected` — ISINs in broker reply but not in session
 
-Dual-exchange edge case (same ISIN on NSE+BSE same day): handled separately, allocator
-does the per-exchange split.
-
 ### `part2/allocator.py` — `allocate_costs()`
 For each ISIN+Direction group:
 1. `weight = client_qty / total_qty`
 2. Verify `sum(weights) ≈ 1.0` via `math.isclose()` — raises `ValueError` if not
-3. Each charge col: `client_share = round(weight × broker_total, 2)`
+3. Each charge col: `client_share = round(weight × broker_total, precision)`
+   - Default precision: 2dp. InputTurnOver: 4dp (`_CHARGE_PRECISION` dict)
 4. Last client: `residual = broker_total - sum(others)` — full precision, no rounding
 5. `InputNetRate = InputNetAmount / Input Quantity` — full precision
+6. `Buy/ Sell` value: `row["Direction"].title()` → `"Buy"` or `"Sell"`
 
 **19 output columns** (exact order matters for Orbis import):
 `S.No | Client Name | CustomerNo | TradeDate | Exchange Type | Settlement No | ISIN No | Buy/ Sell | Input Quantity | InputBrokerage | InputSTT | InputStampDuty | InputSEBIChrg | InputTurnOver | InputOtherCharges | InputGST | InputNetAmount | InputNetRate | CP CODE`
@@ -327,29 +351,30 @@ For each ISIN+Direction group:
 ## 9. All Screens — What Each Does
 
 ### Part 1 — Step 1: Upload & Configure
-- 3 mandatory upload cards: Research File (.xlsx), Bank Book (.xlsx), Scrip-wise Report (.xls)
+- 3 mandatory upload cards: Research File (.xlsx/.xls), Bank Book (.xlsx/.xls), Scrip-wise Report (.xls/.xlsx)
 - 1 optional: Existing Session File (.xlsx) — for second batch of day
-- Tolerance % input (default 0, warning if > 5%)
+- Tolerance % input (default 0, warning banner if > 5%)
 - "Validate Orders" primary button (gold) — triggers validation, advances to Step 2
-- Title + subtitle centered
 
 ### Part 1 — Step 2: Validate Orders
 - Centered title "Validate Orders"
 - Split-badge status bar: `Orders Ready | N` and `Orders Blocked | N`
 - "Exclude All RED" button (red-tinted) + "Exclude Entire Batch" button (dark)
 - Split table: narrow checkbox column (0.7) + wide styled table (8.3)
-  - Column order: S.No | Client | Ticker | Direction | Qty | Units Held/Cash | Ref Price | Status | Reason
+  - Column order: S.No | Client | Ticker | Direction | Qty | Units Held/Cash | **Amount** | Status | Reason
+  - Amount = Qty × Ref Price, with worst-case tolerance applied (buy +tol%, sell -tol%)
+  - Amount displayed with comma formatting (e.g. `1,23,456.78`)
+  - S.No shown as integer; Qty shown to 2dp
   - Status shows "READY" (green rows) or "BLOCKED" (red rows)
   - Context column renamed "Available / Held" in display
 - Sticky bottom bar: "Generate Session File + Broker File" button
   - Disabled if any RED row is still checked OR zero rows included
-- JS patches: semantic button colours (red-tinted Exclude All Red, dark Exclude Batch), hide "Press Enter to apply" hint
 
 ### Part 1 — Step 3: Export
 - Section label "FILES READY"
 - 3 split-badge download links (via components.html data-URI):
-  - Session File (grey label + gold download)
-  - Broker File (grey label + gold download)
+  - Session File — `session_file_DD_MM_YYYY_batch_N.xlsx`
+  - Broker File — `broker_file_DD_MM_YYYY_batch_N.xlsx`
   - "Download Both Files" button (triggers both with 400ms JS gap)
 - Broker file summary table shown below
 
@@ -364,8 +389,8 @@ For each ISIN+Direction group:
 - Centered title "Allocation Complete"
 - Two green split-badge blocks: `Stocks | N` and `Clients | N`
 - Warning banners (if any): not-executed ISINs (amber), unexpected ISINs (red)
-- Allocation summary table (aggregated by scrip)
-- Centered split-badge download: "Orbis Allocation File | Download"
+- Allocation summary table
+- Centered split-badge download: `orbis_allocation_DD_MM_YYYY.xlsx`
 
 ### ISIN Database Tab
 - Search input → filters live
@@ -373,104 +398,145 @@ For each ISIN+Direction group:
 - Total entry count
 - Add New Entry form: Company Name, NSE Code, BSE Code, ISIN Code
 - On add: writes to CSV, clears cache with `get_isin_db.clear()`
+- **Update ISIN Database** button (top-right, compact gold button):
+  - Acts as a file browser — opens CSV upload dialog directly
+  - After upload: inline result shows "X new ISINs added" or "All ISINs already present"
+  - Implemented via JS MutationObserver stamping CSS class on the stFileUploader element
 
 ---
 
-## 10. Key Technical Decisions & Why
+## 10. Download Filename Convention
+
+| File | Pattern | Example |
+|------|---------|---------|
+| Session File | `session_file_DD_MM_YYYY_batch_N.xlsx` | `session_file_27_05_2026_batch_1.xlsx` |
+| Broker File | `broker_file_DD_MM_YYYY_batch_N.xlsx` | `broker_file_27_05_2026_batch_1.xlsx` |
+| Allocation File | `orbis_allocation_DD_MM_YYYY.xlsx` | `orbis_allocation_27_05_2026.xlsx` |
+
+`_TODAY` is defined once at module level: `date.today().strftime("%d_%m_%Y")`.
+Batch number extracted from `session_df["Batch"].max()` at download time.
+
+---
+
+## 11. Key Technical Decisions & Why
 
 | Decision | Why |
 |----------|-----|
 | Single `app.py`, step-based | No sidebar/multipage complexity. Steps are linear — wizard flow fits best. |
 | `components.html` for downloads | `st.download_button` only handles one file. Data-URI anchors + JS enables multi-file download. |
-| Pandas Styler for validation table | Need row background colours AND to rename/reorder columns. Styler renders as HTML (not canvas), so CSS like `white-space:normal` works. |
+| Pandas Styler for validation table | Need row background colours AND rename/reorder columns. Styler renders as HTML (not canvas), so CSS like `white-space:normal` works. |
 | Split table (checkbox + styled) | `st.data_editor` has limited styling. Narrow checkbox editor + wide styled dataframe in side-by-side columns — page scroll keeps them in sync without JS. |
-| `xlrd` for scrip-wise report | Orbis exports `.xls` (Excel 97-2003). `xlrd` 1.2.0 is the last version with `.xls` support. pandas dropped it. |
+| `xlrd` for scrip-wise report | Orbis exports `.xls` (Excel 97-2003). `xlrd` 1.2.0 is the last version with `.xls` support. |
 | `file.seek(0)` in broker readers | `openpyxl.load_workbook` consumes the file stream. Must reset before `pd.read_excel`. |
-| `build_isin_index()` | ISIN DB has 5,324 rows. Without the index, every `lookup_isin` call scans the whole DataFrame. With the index, it's O(1). |
+| `build_isin_index()` | ISIN DB has 5,324+ rows. Without the index, every `lookup_isin` call scans the whole DataFrame. With the index, it's O(1). |
 | `get_isin_db.clear()` | `@st.cache_data` caches by function. Must clear the specific function's cache, not `st.cache_data.clear()` (which clears everything). |
-| Last-client residual (no rounding) | Rounding 2dp on each client leaves a rounding error that accumulates. Last client absorbs the full residual so broker total always equals sum of client totals exactly. |
-| `Int64` for Batch/S.No | Pandas nullable integer — handles NaN from `pd.to_numeric` without converting to float64 (which would show `1.0` instead of `1`). |
-| No yellow validation state | Ref Price is always present in the research file. Yellow was planned for "market order — no price to validate" but the team always provides prices. |
+| Last-client residual (no rounding) | Rounding 2dp on each client leaves accumulated error. Last client absorbs the full residual so broker total always equals sum of client totals exactly. |
+| `Int64` for Batch/S.No | Pandas nullable integer — handles NaN without converting to float64 (avoids `1.0` display issue). |
+| ISIN-based sell merge | Research file may use full company names in Ticker. Merging on ISIN is format-agnostic. |
+| `tolerance` from session_state in Step 2 | Widget only renders in Step 1. Step 2 reads `st.session_state.get("p1_tolerance", 0.0)` to avoid NameError. |
+| `Buy`/`Sell` title case in allocator | Orbis expects title case. Our internal Direction is always uppercase. Apply `.title()` at output time. |
+| Aptos Narrow in allocation Excel | Matches the format used by the Ops team in their manually prepared allocation files. |
+| Tolerance not in broker file | Tolerance is purely an internal cash validation buffer. Broker receives plain Ref Price. |
 
 ---
 
-## 11. CSS Architecture
+## 12. CSS Architecture
 
 All CSS is in the `CSS` constant at the top of `app.py`, injected via `st.markdown(CSS, unsafe_allow_html=True)`.
 
-**Key CSS blocks and what they do:**
-- **Base reset**: DM Sans globally, white background, hide Streamlit chrome (menu/footer/header/deploy button)
+**Key CSS blocks:**
+- **Base reset**: DM Sans globally, white background, hide Streamlit chrome
 - **Block container**: `padding-left/right: 3rem`, `max-width: 100%`
 - **Stepper**: `.step-pill`, `.step-pill.active`, `.step-pill.done`, `.step-line`
-- **Upload cards**: Complex multi-state CSS — empty (dashed gold), uploaded (solid border, file info centered), delete button top-right
+- **Upload cards**: Complex multi-state CSS — empty (dashed gold), uploaded (solid border), delete button top-right
 - **File uploader cloud icon**: Injected via `::before` pseudo-element with inline SVG data-URI
-- **Buttons**: Primary = gold fill (`#D9B244`), Secondary = gold-outlined gradient, disabled = muted beige
+- **Filename wrap**: `white-space: normal; word-break: break-word; flex: 1; min-width: 0`
+- **Buttons**: Primary = gold fill, Secondary = gold-outlined, disabled = muted beige
 - **Column headers**: `[role="columnheader"]` → `background: #E8E0D2 !important`
 - **Hide "Press Enter"**: `[data-testid="InputInstructions"] { display: none !important; }`
 - **Scrollbar**: Thin (4px), gold thumb
+- **ISIN update button**: `.isin-uploader-btn` class stamped by JS — collapses dropzone to 42px button
 
-**JS patterns (via `components.html` iframes and inline `<script>` in `st.markdown`):**
-- Logo click → navigate to Part 1 home (sets `st.session_state` via Streamlit's component bridge)
+**JS patterns:**
+- Logo click → navigate to Part 1 home
 - Sticky bottom bar in validate step: `position: sticky; bottom: 0`
-- Semantic button colours: MutationObserver + setInterval to stamp `.exclude-red` and `.exclude-batch` classes on buttons, then CSS colours them
+- Semantic button colours: MutationObserver stamps `.exclude-red` and `.exclude-batch` classes
 - Download Both: JS queries `a.dl-badge` anchors, clicks first, setTimeout 400ms, clicks second
+- ISIN update button: MutationObserver stamps `isin-uploader-btn` class on `stFileUploader` element
 
 ---
 
-## 12. Input File Specs (Quick Reference)
+## 13. Input File Specs (Quick Reference)
 
 | File | Sheet | Key Columns | Notes |
 |------|-------|-------------|-------|
-| Research File | `Orders` | S.No, OFIN, Client, Ticker, Direction, Qty, Ref Price, Value, CP Code | Value = informational only |
+| Research File | `Orders` (flexible) | S.No, OFIN, Client, Ticker, Direction, Qty, Ref Price, Value, CP Code | Flexible sheet/column names via alias dict |
 | Bank Book | `Bank Balance Summary` | OFIN Code, Balance | Dynamic header scan. Skip "Total" rows. |
-| Scrip-wise Report | `file` | Scrip Name, Item No (=ISIN), Client Code (=OFIN), Quantity | `.xls` format. Skip "Scrip Total" rows. |
+| Scrip-wise Report | First sheet | Scrip Name, Item No (=ISIN), Client Code (=OFIN), Quantity | `.xls` or `.xlsx`. Skip "Scrip Total" rows. |
 | Session File | `Session` | S.No, Batch, OFIN, Client, Ticker, ISIN, Direction, Qty, Ref Price, CP Code | Output of Part 1, input of Part 2 |
 | Ambit Reply | `Sheet1` | Transaction Date, Exchange, ISIN No., Transaction Type, quantity, + charge cols | TradeDate from file |
 | InCred Reply | `Incred_Capital_Trade_Confirmati` | Exchange, ISIN No., Transaction Type, Quantity, + charge cols, CP CODE | TradeDate = today |
 
 ---
 
-## 13. Git History
+## 14. Git History
 
 | Commit | What it did |
 |--------|-------------|
-| `bce0f62` | Initial commit — full working codebase (all logic + UI) |
+| `bce0f62` | Initial commit — full working codebase |
 | `488ebfd` | Pin streamlit to 1.54.0 |
-| `e3537c4` | Pin all dependencies to exact versions |
 | `c0271ad` | Redesign Part 1 upload layout |
-| `56d6442` | Polish upload cards (consistent box sizes, centered file info) |
-| `884db0b` | Polish Validate Orders UI (badges, row colours, sticky bar, table tweaks) |
-| `84e7669` | Redesign Part 1 Download (split-badge downloads, spacing, icons) |
+| `56d6442` | Polish upload cards |
+| `884db0b` | Polish Validate Orders UI (badges, row colours, sticky bar) |
+| `84e7669` | Redesign Part 1 Download (split-badge downloads) |
 | `6dfebb5` | Redesign Part 2 Download (centered split-badge) |
 | `c0161cd` | UX: hide "Press Enter" hint, logo click → home |
 | `8bac8f1` | Fix 3 critical bugs: file.seek(0), assert→ValueError, InCred ISIN .upper() |
-| `8cf265e` | Quality fixes + em dash cleanup + Part 2 UI polish (Stocks/Clients badges, centered headers) |
+| `8cf265e` | Quality fixes + em dash cleanup + Part 2 UI polish |
 | `d2545ff` | Validate table: Context column next to Qty, "X Units" format |
+| `c149e32` | Add HANDOFF.md, wrap-text on all tables |
+| `e708fa0` | Add CONVERSATION_HISTORY.md and HOW_TO_HANDOFF.md |
+| `9e03725` | Fix sell validation for full company names; universal xls/xlsx support; 3-step ISIN lookup |
+| `49ff2aa` | Bulk ISIN update, InputTurnOver 4dp, filename wrap fix, upload card fixes |
+| `131d13e` | Increase Update ISIN Database button height |
+| `fda111c` | Add inline result message after bulk ISIN update |
+| `88ec162` | Amount column with commas in validation table; client name suffix stripping |
+| `6337d82` | Date-stamped filenames (DD_MM_YYYY) on all downloads |
+| `41efbeb` | Buy/Sell title case in allocation file |
+| `14986b5` | Allocation file: Aptos Narrow 11pt, no header fill, thin borders, alignment |
+| `742b288` | InputTurnOver display as 2dp in Excel |
+| `7a3a7af` | TradeDate format DD-MM-YYYY |
+| `6bdfc1f` | Batch number in session and broker file download names |
+| `2ab4ba1` | Worst-case tolerance-adjusted Amount in validation table |
+| `6d3ab85` | Fix NameError: tolerance read from session_state in step 2 |
 
 ---
 
-## 14. Known Quirks
+## 15. Known Quirks
 
 - **Streamlit 1.54.0 is pinned** — newer versions changed upload card DOM structure. Do not upgrade without re-testing all upload card CSS.
-- **components.html iframes** — download badges live inside iframes. JS uses `document` (not `window.parent.document`) since the anchor clicks are within the iframe. Height must be set correctly or buttons clip.
+- **components.html iframes** — download badges live inside iframes. JS uses `document` (not `window.parent.document`) since anchor clicks are within the iframe. Height must be set correctly or buttons clip.
 - **Canvas vs HTML rendering** — `st.dataframe` with a raw DataFrame uses canvas (glide-data-grid). `st.dataframe` with a pandas Styler uses HTML. Only HTML tables respect CSS from `set_properties`. This is why all styled tables use a Styler.
-- **InCred CP Code** — stored as `CP CODE` (all caps) in the InCred reply. The reader looks for this column. `get_incred_cp_codes` normalises ISIN keys to uppercase for consistent lookup.
-- **xlrd 1.2.0 must be pinned** — `pip install xlrd` gets 2.x which only reads `.xlsx`. The scrip-wise report is `.xls`. Always `xlrd==1.2.0`.
-- **ISIN lookup for buys** — scrip-wise report only has current holdings (sell stocks). For buys, the ISIN will typically not be in the scrip report and falls through to the isin_database.
+- **TextColumn for Amount** — Amount uses `st.column_config.TextColumn` (not NumberColumn) because `%,.2f` with comma formatting is not supported by Streamlit's sprintf formatter. Comma formatting is done via pandas Styler lambda instead.
+- **InCred CP Code** — stored as `CP CODE` (all caps) in the InCred reply. `get_incred_cp_codes` normalises ISIN keys to uppercase.
+- **xlrd 1.2.0 must be pinned** — `pip install xlrd` gets 2.x which only reads `.xlsx`. Always `xlrd==1.2.0`.
+- **ISIN lookup for buys** — scrip-wise report only has current holdings (sell stocks). For buys, ISIN falls through to isin_database or name lookup.
+- **JS class-stamping for ISIN button** — `st.markdown('<div class="foo">')` + `st.file_uploader` renders as siblings (not parent-child). CSS descendant selectors don't match. Must stamp class directly on the element via JS MutationObserver.
+- **Tolerance in Step 2** — `tolerance` widget only renders in Step 1. Step 2 must read `st.session_state.get("p1_tolerance", 0.0)`. Do not use `tolerance` as a bare variable in Step 2.
 
 ---
 
-## 15. What Is Not Yet Done (from original plan)
+## 16. What Is Not Yet Done
 
-- **Full test suite** — `tests/` folder has structure but coverage is not complete. The `conftest.py` and some test files exist.
+- **Full test suite** — `tests/` folder has structure but coverage is not complete.
 - **Streamlit deployment** — not set up. App runs locally only.
 - **ISIN database edit/delete** — intentionally out of scope. Research team edits CSV directly.
 - **Email integration** — out of scope.
-- **Tolerance > 5% confirmation gate** — decided to keep as warning-only (no modal gate).
+- **Tolerance in broker file** — decided: tolerance is internal only, broker gets plain Ref Price.
 
 ---
 
-## 16. The Raw Test Instance (`pms_raw/`)
+## 17. The Raw Test Instance (`pms_raw/`)
 
 Located at `C:\Yatharth\pms_raw\app_raw.py`. **Not in git.**
 
@@ -479,27 +545,28 @@ Uses `sys.path.insert(0, r"C:\Yatharth\pms_tool")` to import directly from the m
 Zero code duplication — same functions, same logic.
 
 Extra features vs main app:
-- Shows every intermediate DataFrame (parsed research, bank book, scrip report, etc.)
+- Shows every intermediate DataFrame
 - Weight check table per ISIN+Direction (confirms weights sum to 1.0)
-- Charge totals verification table (allocated total vs broker total per charge column)
+- Charge totals verification table
 - Download buttons for session file and broker file
 
 Run: `python -m streamlit run C:\Yatharth\pms_raw\app_raw.py --server.port 8502`
 
 ---
 
-## 17. Continuing from a New Session
+## 18. Continuing from a New Session
 
 If picking this up fresh (new device, new Claude Code account, etc.):
 
 1. Clone repo: `git clone https://github.com/yathnagada1999/pms-tool`
 2. Install: `pip install -r requirements.txt`
 3. Run: `python -m streamlit run app.py`
-4. Claude Code will auto-read `CLAUDE.md` — read this file (`HANDOFF.md`) too for full context
+4. Read `CLAUDE.md` first (git protocol, business rules), then this file
 
 The `CLAUDE.md` has the git push protocol (password required before every push).
-The `HANDOFF.md` (this file) has everything else.
+This file (`HANDOFF.md`) has everything else.
+See `HOW_TO_HANDOFF.md` for the exact starting prompt to use in a new LLM session.
 
 ---
 
-*Last updated: after commit d2545ff*
+*Last updated: after commit 6d3ab85*

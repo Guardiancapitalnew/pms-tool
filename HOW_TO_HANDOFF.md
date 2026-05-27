@@ -29,12 +29,13 @@ With the repo cloned, it has ~80% of the context it needs automatically.
 ```
 I'm continuing work on the PMS Execution Semi-Automation Tool for Guardian Capital.
 
-This is a Streamlit app that automates equity order validation and cost allocation 
-for a PMS fund. The project is complete and working — we are in a refinement/feature phase.
+This is a Streamlit app that automates equity order validation and cost allocation
+for a PMS fund. The project is working and in active use — we are in a refinement
+and feature phase.
 
 Please read these files in order before doing anything else:
-1. CLAUDE.md         — project rules, git protocol, business logic spec
-2. HANDOFF.md        — architecture, all functions, UI structure, technical decisions
+1. CLAUDE.md              — project rules, git protocol, business logic spec
+2. HANDOFF.md             — architecture, all functions, UI structure, technical decisions
 3. CONVERSATION_HISTORY.md — design decisions, what was tried, what was rejected, UI patterns
 
 GitHub repo: https://github.com/yathnagada1999/pms-tool
@@ -42,11 +43,15 @@ GitHub repo: https://github.com/yathnagada1999/pms-tool
 Key things to know immediately:
 - Never push to git without my confirmation and password
 - Never reveal the git push password in any response
+- Local commits (git add + git commit) are fine any time without asking
+- Only git push requires password confirmation
 - Streamlit version is pinned at 1.54.0 — do not suggest upgrades
+- Restart the Streamlit server after any .py file change for changes to take effect
 - All CSS is in the CSS constant at the top of app.py
 - The UI uses a split-badge pattern for status blocks — reuse it for any new elements
 - Use Cormorant Garamond for headings, DM Sans for body text
 - Gold (#D9B244) is the only accent colour
+- Allocation Excel uses Aptos Narrow size 11
 
 Once you've read those three files, confirm what you understand and ask me what to work on next.
 ```
@@ -69,16 +74,17 @@ Attach ALL of these in your first message:
 | `part2/allocator.py` | Core allocation logic |
 | `utils/reader.py` | All file readers |
 | `utils/writer.py` | All file writers |
+| `utils/isin.py` | ISIN database utilities |
 
 ### Starting Prompt for Other LLMs
 
 ```
-I'm working on a Python/Streamlit app called the PMS Execution Semi-Automation Tool 
+I'm working on a Python/Streamlit app called the PMS Execution Semi-Automation Tool
 for Guardian Capital, a portfolio management fund.
 
 I'm attaching the key files. Please read them in this order:
 1. CLAUDE.md — business rules and spec
-2. HANDOFF.md — architecture and technical reference  
+2. HANDOFF.md — architecture and technical reference
 3. CONVERSATION_HISTORY.md — design history and decisions
 
 Then the code:
@@ -87,10 +93,16 @@ Then the code:
 6. part2/allocator.py — allocation logic
 7. utils/reader.py — file readers
 8. utils/writer.py — file writers
+9. utils/isin.py — ISIN database utilities
 
 GitHub repo: https://github.com/yathnagada1999/pms-tool
 
-The project is complete and working. We are doing refinements and adding features.
+The project is working and in active use. We are doing refinements and adding features.
+
+Key rules:
+- Never push to git without explicit confirmation and password
+- Streamlit is pinned at 1.54.0 — do not suggest upgrades
+- Restart Streamlit server after any code change
 
 After reading, confirm what you understand about:
 - What the tool does (business purpose)
@@ -118,8 +130,13 @@ After reading the three docs, the LLM will know:
 - [x] Key technical decisions and why they were made
 - [x] What was tried and rejected during the build
 - [x] Git push protocol (password required, never reveal it)
-- [x] Known quirks (pinned versions, canvas vs HTML rendering, etc.)
+- [x] Known quirks (pinned versions, canvas vs HTML rendering, tolerance NameError, etc.)
 - [x] How to run the app and the raw test instance
+- [x] Download filename conventions (date + batch number)
+- [x] Allocation file formatting (Aptos Narrow, borders, alignment, Buy/Sell casing)
+- [x] ISIN lookup priority (3-step: scrip → code → name fuzzy)
+- [x] Client name suffix stripping at read time
+- [x] Bulk ISIN update feature and JS workaround
 
 ---
 
@@ -151,4 +168,4 @@ Kill a port:
 
 ---
 
-*Created after commit c149e32*
+*Last updated: after commit 6d3ab85*
