@@ -97,7 +97,7 @@ CURRENCY_COLS = {
 
 # Per-column Excel number format - overrides the default "0.00" where needed
 _COL_NUMBER_FORMAT = {
-    "InputTurnOver": "0.0000",
+    "InputTurnOver": "0.00",
 }
 
 HEADER_FILL    = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
