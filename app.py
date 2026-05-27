@@ -898,7 +898,7 @@ def p1_validate():
     base_cols = ["S.No", "Client", "Ticker", "Direction", "Qty"]
     if context_col:
         base_cols.append(context_col)   # Context sits immediately right of Qty
-    base_cols += ["Ref Price", "Status", "Reason"]
+    base_cols += ["Value", "Status", "Reason"]
     editor_df = vdf[base_cols].copy()
     if context_col:
         editor_df.rename(columns={"Context": "Units Held / Cash"}, inplace=True)
@@ -938,19 +938,22 @@ def p1_validate():
         styled_df = (
             display_df.style
             .apply(_row_style, axis=1)
-            .format({"Status": lambda v: "READY" if v == "GREEN" else "BLOCKED"})
+            .format({
+                "Status": lambda v: "READY" if v == "GREEN" else "BLOCKED",
+                "Value":  lambda v: f"{v:,.2f}" if v == v else "",
+            })
             .set_properties(**{"white-space": "normal"})
         )
 
         st.dataframe(
             styled_df,
             column_config={
-                "S.No":              st.column_config.NumberColumn("No.", width="small"),
+                "S.No":              st.column_config.NumberColumn("No.", format="%d", width="small"),
                 "Client":            st.column_config.TextColumn("Client", width="medium"),
                 "Ticker":            st.column_config.TextColumn("Ticker", width="small"),
                 "Direction":         st.column_config.TextColumn("Dir", width="small"),
-                "Qty":               st.column_config.NumberColumn("Qty", width="small"),
-                "Ref Price":         st.column_config.NumberColumn("Ref Price", format="%.2f", width="small"),
+                "Qty":               st.column_config.NumberColumn("Qty", format="%.2f", width="small"),
+                "Value":             st.column_config.TextColumn("Amount", width="small"),
                 "Status":            st.column_config.TextColumn("Status", width="small"),
                 "Units Held / Cash": st.column_config.TextColumn("Available / Held", width="medium"),
                 "Reason":            st.column_config.TextColumn("Reason", width="large"),

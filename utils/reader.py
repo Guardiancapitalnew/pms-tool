@@ -270,7 +270,13 @@ def read_research_file(file) -> pd.DataFrame:
     df["OFIN"] = _normalise_ofin(df["OFIN"])
     df["Direction"] = df["Direction"].astype(str).str.strip().str.upper()
     df["Ticker"] = df["Ticker"].astype(str).str.strip()
-    df["Client"] = df["Client"].astype(str).str.strip()
+    df["Client"] = (
+        df["Client"].astype(str).str.strip()
+        # Strip research team suffixes e.g. "-1", "-2", "- New", "- Old"
+        # Pattern: optional space + dash + optional space + word chars at end of name
+        .str.replace(r'\s*-\s*\w+\s*$', '', regex=True)
+        .str.strip()
+    )
     df["CP Code"] = df["CP Code"].astype(str).str.strip()
     df["Qty"] = pd.to_numeric(df["Qty"], errors="coerce")
     df["Ref Price"] = pd.to_numeric(df["Ref Price"], errors="coerce")
