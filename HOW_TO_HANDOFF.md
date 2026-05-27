@@ -46,12 +46,15 @@ Key things to know immediately:
 - Local commits (git add + git commit) are fine any time without asking
 - Only git push requires password confirmation
 - Streamlit version is pinned at 1.54.0 — do not suggest upgrades
+- Live app is deployed at https://pms-tool.streamlit.app/ (Streamlit Community Cloud)
 - Restart the Streamlit server after any .py file change for changes to take effect
 - All CSS is in the CSS constant at the top of app.py
 - The UI uses a split-badge pattern for status blocks — reuse it for any new elements
 - Use Cormorant Garamond for headings, DM Sans for body text
 - Gold (#D9B244) is the only accent colour
 - Allocation Excel uses Aptos Narrow size 11
+- Buy/Sell casing in allocation file must be title case (Buy / Sell), not uppercase
+- Tolerance widget (key="p1_tolerance") only renders in Step 1 — read via st.session_state in Step 2
 
 Once you've read those three files, confirm what you understand and ask me what to work on next.
 ```
@@ -131,12 +134,15 @@ After reading the three docs, the LLM will know:
 - [x] What was tried and rejected during the build
 - [x] Git push protocol (password required, never reveal it)
 - [x] Known quirks (pinned versions, canvas vs HTML rendering, tolerance NameError, etc.)
-- [x] How to run the app and the raw test instance
-- [x] Download filename conventions (date + batch number)
+- [x] Live deployment URL (https://pms-tool.streamlit.app/)
+- [x] How to run the app locally and the raw test instance
+- [x] Download filename conventions (date + batch number in session/broker files)
 - [x] Allocation file formatting (Aptos Narrow, borders, alignment, Buy/Sell casing)
 - [x] ISIN lookup priority (3-step: scrip → code → name fuzzy)
 - [x] Client name suffix stripping at read time
 - [x] Bulk ISIN update feature and JS workaround
+- [x] Tolerance-adjusted worst-case Amount column in validation table
+- [x] InputTurnOver: 4dp computed precision, 2dp Excel display format
 
 ---
 
@@ -169,4 +175,4 @@ Kill a port:
 
 ---
 
-*Last updated: after commit 6d3ab85*
+*Last updated: after commit 309835d*

@@ -241,6 +241,8 @@ Stored in `st.session_state.isin_bulk_msg`, auto-cleared after display.
 **Request**: InputTurnOver should be computed and stored at 4 decimal places.
 **Implementation**: `_CHARGE_PRECISION = {"InputTurnOver": 4}` dict in `allocator.py`.
 All other charge columns round to 2dp. Last client always gets full-precision residual.
+InputNetAmount also rounded to 2dp for non-last clients; last client always gets
+`broker_total - sum(all_others)` with full precision.
 
 **Later request**: Excel should display InputTurnOver as 2dp (but full value still stored/expandable).
 **Fix**: `_COL_NUMBER_FORMAT = {"InputTurnOver": "0.00"}` in `writer.py`.
@@ -266,12 +268,29 @@ Excel number format string: `"DD-MM-YYYY"`.
 `_CELL_BORDER = Border(left=..., right=..., top=..., bottom=...)`.
 Applied to every cell in both header row and data rows.
 
-### InputNetRate floating-point note
-When comparing our allocation file vs Ops team file:
+### Ops team file comparison
+A side-by-side comparison of our generated allocation file vs the Ops team's manually prepared
+file was done (45-row file). Result:
 - All 45 rows matched exactly on every numeric column
-- Only difference: `Buy/Sell` casing (fixed)
-- Tiny 11th-decimal differences in InputNetRate (e.g. `3377.18078431373` vs `3377.18078431372`)
-  are IEEE 754 floating-point representation — not a bug, not meaningful for Orbis.
+- Every charge column (Brokerage, STT, StampDuty, SEBI, TurnoverTax, OtherCharges, GST,
+  NetAmount, InputNetRate) — identical values across all rows
+- Only difference found: `Buy/Sell` casing (our tool produced `BUY`/`SELL`; Ops team uses `Buy`/`Sell`)
+  → fixed with `.title()` in allocator
+
+**InputNetRate floating-point note**: Tiny 11th-decimal differences visible when comparing
+individual cells (e.g. `3377.18078431373` vs `3377.18078431372`) are IEEE 754 floating-point
+representation artifacts — not a bug, not meaningful for Orbis.
+Both tools perform the same `NetAmount / Qty` division; the final bit of the float representation
+can differ depending on intermediate precision and compiler.
+
+### Why `file.seek(0)` matters in broker readers
+`openpyxl.load_workbook` is called first to get the sheet list for validation.
+This advances the file pointer to end-of-stream.
+`pd.read_excel` is then called on the same BytesIO object — if the pointer isn't reset,
+it reads an empty stream and returns an empty DataFrame (silent bug, no error raised).
+**Fix**: `file.seek(0)` before every `pd.read_excel` call. The same issue applies when
+calling `get_incred_cp_codes` after `parse_incred_reply` on the same file object.
+This was a critical bug found and fixed in commit `8bac8f1`.
 
 ---
 
@@ -373,16 +392,15 @@ Only `git push` requires the password.
 ## Things Explicitly Decided NOT To Do
 
 - No yellow/amber validation rows (ref price always present)
-- No confirmation gate for tolerance > 5% (warning only)
-- No ISIN database edit or delete UI
+- No confirmation gate for tolerance > 5% (warning banner only)
+- No ISIN database edit or delete UI (research team edits CSV directly)
 - No email integration
-- No deployment/cloud setup
 - No login or authentication
 - No live price feed
-- No partial execution handling
+- No partial execution handling (broker executes full pooled qty)
 - No icons on Exclude buttons
-- No zip download for "Download Both" (both excels separately)
-- No tolerance value in broker file (internal buffer only)
+- No zip download for "Download Both" (two separate Excel files)
+- No tolerance value in broker file (internal cash buffer only; broker gets plain Ref Price)
 
 ---
 
@@ -448,4 +466,32 @@ st.dataframe(styled, use_container_width=True, hide_index=True)
 
 ---
 
-*Last updated: after commit 6d3ab85 (tolerance NameError fix)*
+---
+
+## Comprehensive Documentation Review (May 2026)
+
+After the main feature set was complete, all three handoff documents were reviewed against
+the actual code and git history. Key inaccuracies found and corrected in `HANDOFF.md`:
+
+1. **"Streamlit deployment — not set up. App runs locally only."** — WRONG.
+   App is live at `https://pms-tool.streamlit.app/` via Streamlit Community Cloud.
+   Corrected to include the full deployment section with URL.
+
+2. **"ISIN database edit/delete — intentionally out of scope. Research team edits CSV directly."**
+   — INCOMPLETE. The UI *does* support adding new entries (single form) and bulk-updating
+   via CSV upload. Only edit/delete of existing entries is out of scope.
+
+3. **Duplicate Section 17 numbering** — fixed to sequential sections 16 and 17.
+
+4. **Missing commits** — git log was checked; several commits (`0a5e012`, `14986b5`, `9c962b1`,
+   `309835d`) were added to the history table.
+
+5. **InputTurnOver description** — incorrectly said "full precision". Corrected to
+   "4dp precision stored, displays 2dp in Excel".
+
+6. **Scrip-wise sheet name** — clarified that the code reads by index 0 (not by the name "file"
+   from the original spec), because the sheet name changes daily.
+
+---
+
+*Last updated: after commit 309835d*
