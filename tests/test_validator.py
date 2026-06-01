@@ -135,10 +135,13 @@ def test_isin_populated_from_scrip_report(
 def test_isin_populated_from_database_fallback(
     sample_research_df, sample_bank_book, sample_isin_db
 ):
-    # Empty scrip_df - forces ISIN database lookup
+    # Empty scrip_df - forces ISIN database lookup for buy-side ISINs.
+    # Filter to BUYs only because the validator's new guard rejects sells
+    # without a scrip-wise report (that combination is a real UI bug now).
+    buys_only = sample_research_df[sample_research_df["Direction"] == "BUY"].copy()
     empty_scrip = pd.DataFrame(columns=["OFIN", "Scrip Name", "ISIN", "Quantity"])
     result = validate_orders(
-        sample_research_df, sample_bank_book, empty_scrip, sample_isin_db
+        buys_only, sample_bank_book, empty_scrip, sample_isin_db
     )
     kotak_rows = result[result["Ticker"] == "KOTAKBANK"]
     assert all(kotak_rows["ISIN"] == "INE237A01036")

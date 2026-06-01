@@ -585,6 +585,50 @@ def get_isin_db():
     return load_isin_database()
 
 
+def _detect_research_directions(file) -> set[str]:
+    """Peek at the Direction column of a research file without running validation.
+
+    Cached by (file.name, file.size) in st.session_state so we don't re-parse
+    the file on every Streamlit rerun. Returns set() on any failure - the UI
+    falls back to "require both files" in that case.
+    """
+    if file is None:
+        return set()
+    cache_key = (file.name, file.size)
+    cached = st.session_state.get("_research_dir_cache")
+    if cached and cached[0] == cache_key:
+        return cached[1]
+    try:
+        file.seek(0)
+        df = read_research_file(file)
+        file.seek(0)
+        dirs = set(df["Direction"].astype(str).str.strip().str.upper().unique())
+    except Exception:
+        dirs = set()
+    st.session_state["_research_dir_cache"] = (cache_key, dirs)
+    return dirs
+
+
+def _detect_session_directions(file) -> set[str]:
+    """Peek at the Direction column of an existing session file.
+    Same caching pattern as _detect_research_directions."""
+    if file is None:
+        return set()
+    cache_key = (file.name, file.size)
+    cached = st.session_state.get("_session_dir_cache")
+    if cached and cached[0] == cache_key:
+        return cached[1]
+    try:
+        file.seek(0)
+        df = read_session_file(file)
+        file.seek(0)
+        dirs = set(df["Direction"].astype(str).str.strip().str.upper().unique())
+    except Exception:
+        dirs = set()
+    st.session_state["_session_dir_cache"] = (cache_key, dirs)
+    return dirs
+
+
 def _logo_b64() -> str | None:
     if LOGO_PATH.exists():
         return base64.b64encode(LOGO_PATH.read_bytes()).decode()
@@ -779,9 +823,33 @@ def p1_upload():
                 unsafe_allow_html=True,
             )
 
-    all_uploaded = bool(research_file and bank_file and scrip_file)
-    if batch_mode and not existing_file:
-        all_uploaded = False
+    # ── Smart file-requirement detection ─────────────────────────────────
+    # Peek at directions in today's research file + any existing session file.
+    # Defensive: a SELL anywhere (research or prior batches) means Scrip-wise
+    # is needed; a BUY anywhere means Bank Book is needed.
+    research_dirs = _detect_research_directions(research_file)
+    session_dirs  = _detect_session_directions(existing_file)
+    combined_dirs = research_dirs | session_dirs
+
+    # Default to "require both" until research is parsed; then refine.
+    if research_file is None:
+        needs_bank, needs_scrip = True, True
+    else:
+        needs_bank  = "BUY"  in combined_dirs
+        needs_scrip = "SELL" in combined_dirs
+
+    # Compose missing-file list for the hint message
+    missing: list[str] = []
+    if research_file is None:
+        missing.append("Research File")
+    if needs_bank and bank_file is None:
+        missing.append("Bank Book")
+    if needs_scrip and scrip_file is None:
+        missing.append("Scrip-wise Report")
+    if batch_mode and existing_file is None:
+        missing.append("Existing Session File")
+
+    all_uploaded = not missing
 
     # ── Settings row 2 - Validate Orders button, right-aligned (under card 3)
     st.markdown('<div style="height:0.4rem"></div>', unsafe_allow_html=True)
@@ -796,10 +864,11 @@ def p1_upload():
             use_container_width=True,
         )
         if not all_uploaded:
+            hint = f"Missing: {', '.join(missing)}" if missing else "Upload required files to continue"
             st.markdown(
-                '<div style="font-size:0.72rem;color:#B0A89E;text-align:center;'
-                'margin-top:5px;font-family:\'DM Sans\',sans-serif;font-weight:300">'
-                'Upload all required files to continue</div>',
+                f'<div style="font-size:0.72rem;color:#B0A89E;text-align:center;'
+                f'margin-top:5px;font-family:\'DM Sans\',sans-serif;font-weight:300">'
+                f'{hint}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -807,10 +876,26 @@ def p1_upload():
         with st.spinner("Parsing files and validating orders..."):
             try:
                 isin_db = get_isin_db()
+                # seek(0) is defensive - detection helpers already reset, but
+                # cache-hit paths never touched the file pointer at all
+                research_file.seek(0)
                 research_df = read_research_file(research_file)
-                bank_book = read_bank_book(bank_file)
-                scrip_df = read_scrip_wise_report(scrip_file)
-                existing_session_df = read_session_file(existing_file) if existing_file else None
+
+                bank_book = None
+                if bank_file is not None:
+                    bank_file.seek(0)
+                    bank_book = read_bank_book(bank_file)
+
+                scrip_df = None
+                if scrip_file is not None:
+                    scrip_file.seek(0)
+                    scrip_df = read_scrip_wise_report(scrip_file)
+
+                existing_session_df = None
+                if existing_file is not None:
+                    existing_file.seek(0)
+                    existing_session_df = read_session_file(existing_file)
+
                 validation_df = validate_orders(
                     research_df=research_df,
                     bank_book=bank_book,

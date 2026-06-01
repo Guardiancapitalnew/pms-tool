@@ -4,7 +4,12 @@ Returns the research DataFrame enriched with Status, Reason, ISIN, and Context c
 """
 import pandas as pd
 
-from utils.isin import lookup_isin, lookup_isin_by_name, build_isin_index
+from utils.isin import (
+    lookup_isin,
+    lookup_isin_by_name,
+    build_isin_index,
+    build_name_token_index,
+)
 
 
 def _get_committed_cash(existing_session_df: pd.DataFrame | None) -> dict[str, float]:
@@ -33,8 +38,8 @@ def _get_committed_cash(existing_session_df: pd.DataFrame | None) -> dict[str, f
 
 def validate_orders(
     research_df: pd.DataFrame,
-    bank_book: dict[str, float],
-    scrip_df: pd.DataFrame,
+    bank_book: dict[str, float] | None,
+    scrip_df: pd.DataFrame | None,
     isin_db: pd.DataFrame,
     existing_session_df: pd.DataFrame | None = None,
     tolerance: float = 0.0,
@@ -44,10 +49,16 @@ def validate_orders(
     Sell validation: units_held >= qty_ordered
     Buy validation: (bank_balance - committed_cash) >= qty * ref_price * (1 + tol/100)
 
+    bank_book and scrip_df may be omitted (None) when today's research file
+    contains no BUY (resp. SELL) orders AND no batch-history file contributes
+    that direction. A hard guard rejects the call if the missing file is
+    actually needed - that case is a UI bug, not a runtime condition.
+
     Args:
         research_df: parsed research file DataFrame
-        bank_book: dict of {OFIN: cash_balance}
-        scrip_df: parsed scrip-wise report DataFrame [OFIN, Scrip Name, ISIN, Quantity]
+        bank_book: dict of {OFIN: cash_balance}, or None when no BUY orders
+        scrip_df: parsed scrip-wise report DataFrame [OFIN, Scrip Name, ISIN, Quantity],
+                  or None when no SELL orders
         isin_db: ISIN database DataFrame
         existing_session_df: optional existing session file for batch-2 committed cash
         tolerance: price tolerance % for buy cash check (default 0)
@@ -58,13 +69,45 @@ def validate_orders(
     """
     df = research_df.copy()
 
+    # ── Hard guards: if a required file is missing, this is a UI bug. ──────
+    # Defensive: combine today's research + any existing session file directions
+    # so a pending SELL from an earlier batch still triggers the scrip-wise check.
+    has_sells = (df["Direction"].str.upper() == "SELL").any()
+    has_buys  = (df["Direction"].str.upper() == "BUY").any()
+    if existing_session_df is not None and not existing_session_df.empty:
+        ex_dir = existing_session_df["Direction"].astype(str).str.strip().str.upper()
+        has_sells = has_sells or (ex_dir == "SELL").any()
+        has_buys  = has_buys  or (ex_dir == "BUY").any()
+
+    if has_sells and (scrip_df is None or scrip_df.empty):
+        raise ValueError(
+            "Sell orders are present but no Scrip-wise Report was provided."
+        )
+    if has_buys and not bank_book:
+        raise ValueError(
+            "Buy orders are present but no Bank Book was provided."
+        )
+
+    # Default empty containers so the rest of the function doesn't need None-checks.
+    # An empty scrip_norm is harmless: it skips lookup step 1 (no rows to match)
+    # and the sell block never runs anyway (sells_mask.any() == False).
+    if scrip_df is None:
+        scrip_df = pd.DataFrame(columns=["OFIN", "Scrip Name", "ISIN", "Quantity"])
+    if bank_book is None:
+        bank_book = {}
+
     # Normalise scrip_df for merging
     scrip_norm = scrip_df.copy()
-    scrip_norm["Scrip Name"] = scrip_norm["Scrip Name"].str.upper().str.strip()
+    scrip_norm["Scrip Name"] = scrip_norm["Scrip Name"].astype(str).str.upper().str.strip()
     scrip_norm["OFIN"] = scrip_norm["OFIN"].astype(str).str.strip()
+    if "ISIN" not in scrip_norm.columns:
+        scrip_norm["ISIN"] = ""
 
     # Build O(1) lookup index once - avoids re-scanning 5K rows per order
     isin_index = build_isin_index(isin_db)
+    # Pre-tokenise DB names once so the name-fallback path doesn't re-tokenise
+    # all 5K rows on every research row that falls through to it
+    name_token_index = build_name_token_index(isin_db)
 
     # ISIN lookup - scrip_df first, then isin_db index, then isin_db name
     def _lookup_isin_for_row(ticker: str, ofin: str, direction: str) -> str:
@@ -78,7 +121,7 @@ def validate_orders(
             return isin
         # 3. Try ISIN database by company name - handles full names like
         #    "AU SMALL FINANCE BANK LTD" when scrip has "AUBANK"
-        isin = lookup_isin_by_name(ticker, isin_db)
+        isin = lookup_isin_by_name(ticker, isin_db, _token_index=name_token_index)
         return isin if isin else ""
 
     df["ISIN"] = df.apply(
