@@ -112,7 +112,34 @@ def _name_tokens(s: str) -> list[str]:
     return [t for t in cleaned.split() if len(t) >= 2 and t not in _NAME_STOP_WORDS]
 
 
-def lookup_isin_by_name(company_name: str, db: pd.DataFrame) -> str | None:
+def build_name_token_index(db: pd.DataFrame) -> list[tuple[list[str], str]]:
+    """Pre-tokenise every company name in the database for reuse.
+
+    Used by lookup_isin_by_name() to avoid re-tokenising all 5K+ DB rows on
+    every call. Built once per validation pass alongside build_isin_index().
+
+    Rows whose Name produces no usable tokens (after stop-word filtering) are
+    skipped - they could never match anyway.
+
+    Args:
+        db: DataFrame from load_isin_database()
+
+    Returns:
+        list of (tokens, isin_code) tuples
+    """
+    index: list[tuple[list[str], str]] = []
+    for _, row in db.iterrows():
+        tokens = _name_tokens(str(row["Name"]))
+        if tokens:
+            index.append((tokens, row["ISIN Code"]))
+    return index
+
+
+def lookup_isin_by_name(
+    company_name: str,
+    db: pd.DataFrame,
+    _token_index: list[tuple[list[str], str]] | None = None,
+) -> str | None:
     """Find ISIN by fuzzy company name match.
 
     Used as a last-resort fallback when the ticker is a full company name
@@ -132,6 +159,9 @@ def lookup_isin_by_name(company_name: str, db: pd.DataFrame) -> str | None:
     Args:
         company_name: full or abbreviated company name from research file
         db: ISIN database DataFrame from load_isin_database()
+        _token_index: optional pre-built list from build_name_token_index() -
+                      pass when calling repeatedly within one validation pass
+                      so the 5K-row tokenisation isn't redone each call.
 
     Returns:
         ISIN string if a confident match is found, None if no match or ambiguous
@@ -140,14 +170,16 @@ def lookup_isin_by_name(company_name: str, db: pd.DataFrame) -> str | None:
     if not research_tokens:
         return None
 
+    # Build the token index on the fly if the caller didn't supply one.
+    # Keeps the old single-call API working without forcing every caller to
+    # know about the precompute step.
+    if _token_index is None:
+        _token_index = build_name_token_index(db)
+
     best_isin: str | None = None
     best_score: float = 0.0
 
-    for _, row in db.iterrows():
-        db_tokens = _name_tokens(str(row["Name"]))
-        if not db_tokens:
-            continue
-
+    for db_tokens, isin_code in _token_index:
         # Compare shorter list against longer list (prefix match)
         if len(db_tokens) <= len(research_tokens):
             shorter, longer = db_tokens, research_tokens
@@ -169,7 +201,7 @@ def lookup_isin_by_name(company_name: str, db: pd.DataFrame) -> str | None:
         score = matched / max(len(db_tokens), len(research_tokens))
         if score > best_score:
             best_score = score
-            best_isin = row["ISIN Code"]
+            best_isin = isin_code
 
     return best_isin
 
