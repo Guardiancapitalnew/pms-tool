@@ -143,6 +143,14 @@ After reading the three docs, the LLM will know:
 - [x] Bulk ISIN update feature and JS workaround
 - [x] Tolerance-adjusted worst-case Amount column in validation table
 - [x] InputTurnOver: 4dp computed precision, 2dp Excel display format
+- [x] Smart file requirements — Bank Book / Scrip-wise auto-grey when not needed for today's orders
+- [x] Defensive multi-batch direction check (today's research + existing session file)
+- [x] Direction alias map — 27 synonyms (Purchase, Sale, B, S, Long, Short, Buying, Selling, etc.) map to canonical BUY/SELL
+- [x] Blank Direction rows silently dropped at read time (handles trailing totals/summary rows)
+- [x] Detection-error banner — unrecognised Direction values surface a clear error before Validate
+- [x] Session-file CP Code round-trip fix — blank cells stay blank, not the string "nan"
+- [x] Single `data_editor` + Styler validation table (not the previous split-table pattern)
+- [x] 86-test suite covering matcher, parser, writer, allocator CP-code fallback, reader edge cases, end-to-end pipelines (Ambit + InCred)
 
 ---
 
@@ -175,4 +183,4 @@ Kill a port:
 
 ---
 
-*Last updated: after commit 309835d*
+*Last updated: after commit 3333e35*

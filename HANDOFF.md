@@ -236,10 +236,24 @@ Uses pandas Styler passed to `st.dataframe` — renders as HTML (not canvas), so
 Green rows: `rgba(22,163,74,0.07)` bg. Red rows: `rgba(220,38,38,0.06)` bg.
 `set_properties(white-space: normal)` enables text wrapping in Reason column.
 
-#### Split table (validate orders page)
-Two side-by-side Streamlit columns: narrow (0.7 ratio) for checkboxes only, wide (8.3 ratio)
-for the styled display table. Both `height="auto"` so the PAGE scrolls — keeps rows in sync
-without any JS height-matching.
+#### Single data_editor + Styler (validate orders page)
+One `st.data_editor` carries the Include checkbox AND the styled display data. The Styler
+applies row background colours (green/red) plus `.format()` to transform GREEN/RED → READY/BLOCKED
+and to comma-format the Amount column. All non-Include columns are disabled via `disabled=[...]`.
+
+(Earlier versions used a split-table pattern — narrow data_editor for checkboxes + wide dataframe
+for display, side-by-side. Merged into a single component in commit `14a2a7a` so row alignment is
+no longer dependent on page scroll.)
+
+#### Dimmed (greyed) upload cards
+Cards that aren't needed for today's orders (e.g. Scrip-wise on a buy-only day) get a CSS
+dimming treatment: label opacity 0.4, no `*` asterisk, dropzone opacity 0.45 with a neutral
+border. The card stays fully uploadable — it's a soft override, not a block. Hover lifts
+opacity to 0.75 to signal it's still functional.
+
+The dim is driven by a `.upload-label-dimmed` class on the label markdown; JS in `p1_upload`
+stamps a matching `.card-dimmed` class onto the adjacent `stFileUploader` (markdown + uploader
+render as DOM siblings, not parent-child, so CSS descendant selectors can't link them).
 
 #### Download via data-URI
 `st.download_button` only downloads one file. Part 1 Export and Part 2 both use
@@ -264,10 +278,21 @@ Connector lines turn gold when done. Pure HTML/CSS, rendered via `st.markdown`.
 |----------|---------|
 | `load_isin_database()` | Reads `data/isin_database.csv`. Decorated with `@st.cache_data` in app.py via `get_isin_db()`. |
 | `build_isin_index(db)` | Returns `{UPPERCASE_TICKER: ISIN}` dict for O(1) lookups. BSE inserted first, NSE overwrites — NSE always wins. |
+| `build_name_token_index(db)` | Returns `list[(tokens, isin)]` pre-tokenised once per session. Used by `lookup_isin_by_name` to avoid re-tokenising all 5K DB rows on every call. |
 | `lookup_isin(ticker, db, _index)` | Returns ISIN string or None. Uses pre-built index if provided; else scans DataFrame. NSE Code priority, BSE fallback. |
-| `lookup_isin_by_name(company_name, db)` | Fuzzy company name match — last resort for full names like "AU SMALL FINANCE BANK LTD". Returns ISIN or None. |
+| `lookup_isin_by_name(company_name, db, _token_index=None)` | Fuzzy company name match — last resort for full names like "AU SMALL FINANCE BANK LTD". Accepts a precomputed `_token_index` from `build_name_token_index` for O(N) lookup; builds one on the fly if not provided. Returns ISIN or None. |
 | `add_isin_entry(name, nse, bse, isin)` | Appends single row to CSV, re-saves. Call `get_isin_db.clear()` after. |
 | `bulk_update_isin_database(file)` | Reads uploaded CSV, skips rows whose ISIN Code already exists, appends new rows. Returns `(added, skipped)` tuple. |
+
+### `app.py` — direction-detection helpers
+| Helper | Purpose |
+|--------|---------|
+| `_detect_research_directions(file)` | Reads a research file's Direction column and returns a `set[str]` (subset of `{"BUY", "SELL"}`). Cached in `st.session_state` by `(file.name, file.size)` so the file isn't re-parsed on every Streamlit rerun. Raises `ValueError` if the file can't be parsed or contains any non-BUY/non-SELL Direction value after alias normalisation. |
+| `_detect_session_directions(file)` | Same contract for an existing session file (used in multi-batch mode). |
+
+Failures are cached **as the exception object** so a broken file isn't re-parsed every rerun.
+Callers in `p1_upload` wrap each call in `try/except ValueError` and surface the message in a
+red banner above the upload cards; the Validate button stays disabled while an error is active.
 
 **ISIN lookup priority** (used in `validator.py` for every order row):
 1. Scrip-wise report — exact Scrip Name match (case-insensitive uppercase)
@@ -285,12 +310,26 @@ Connector lines turn gold when done. Pure HTML/CSS, rendered via `st.markdown`.
 ### `utils/reader.py`
 | Function | Returns |
 |----------|---------|
-| `read_research_file(file)` | DataFrame — all research order columns. Direction uppercase, client names suffix-stripped. |
+| `read_research_file(file)` | DataFrame — all research order columns. Direction normalised via alias map to canonical BUY/SELL; client names suffix-stripped; blank-Direction rows (trailing totals) dropped. |
 | `read_bank_book(file)` | `dict[OFIN str → balance float]` |
 | `read_scrip_wise_report(file)` | DataFrame — columns: OFIN, Scrip Name, ISIN, Quantity |
-| `read_session_file(file)` | DataFrame — 10 SESSION_REQUIRED columns |
+| `read_session_file(file)` | DataFrame — 10 SESSION_REQUIRED columns. Same Direction handling as research; CP Code blanks cleaned (see round-trip note below). |
 | `read_broker_reply_ambit(file)` | Raw Ambit DataFrame |
 | `read_broker_reply_incred(file)` | Raw InCred DataFrame (numeric casting applied at read time) |
+
+**Direction normalisation helpers (module-private)**:
+| Helper | Purpose |
+|--------|---------|
+| `_DIRECTION_ALIASES` | 27-entry dict mapping common synonyms → canonical BUY/SELL. BUY family: `BUY, B, BUYS, BUYING, BOUGHT, PURCHASE, PURCHASES, PURCHASED, PURCHASING, PURCH, LONG, ADD, ACQUIRE, ENTRY, ENTER`. SELL family: `SELL, S, SELLS, SELLING, SOLD, SALE, SALES, SHORT, TRIM, REDUCE, DISPOSE, EXIT`. Anything else (typos, truly unknown) passes through and is surfaced as a strict error by the UI. |
+| `_DIRECTION_BLANK_TOKENS` | `{"", "NAN", "NONE"}` — values that mean "this row isn't an order" (typically trailing totals / summary rows). |
+| `_is_order_row(series)` | Boolean mask used to drop non-order rows during parsing. |
+| `_normalise_direction(series)` | Strip + upper + alias map. Unrecognised values pass through. |
+
+**CP Code round-trip fix** (in `read_session_file`):
+`dtype=str` reads blank Excel cells as the literal string `"nan"`, which is truthy. Without the
+fix, the allocator's "if CP Code is blank, use InCred fallback" check silently failed and
+`"nan"` ended up in the allocation file's CP CODE column. The reader now resets `"nan"` CP
+Codes back to `""` before returning the DataFrame. Regression test in `tests/test_reader.py`.
 
 **All readers accept both `.xls` and `.xlsx`** — format auto-detected from magic bytes
 (`content[:4] == b'\xd0\xcf\x11\xe0'` → xls; otherwise xlsx).
@@ -339,7 +378,20 @@ Strips: "USHA SARVARAYALU- New" → "USHA SARVARAYALU"
 
 **Signature**: `validate_orders(research_df, bank_book, scrip_df, isin_db, existing_session_df=None, tolerance=0.0) → pd.DataFrame`
 
+`bank_book` and `scrip_df` are **optional** (accept `None`) — when today's research file is
+buy-only the scrip-wise report isn't needed; when sell-only the bank book isn't needed.
+
 Returns research_df with 4 new columns: `ISIN` (str), `Status` ("GREEN"|"RED"), `Reason` (str), `Context` (str).
+
+**Hard guards** (raised at the top of the function — these reject UI bugs that let a
+mismatched combination slip through):
+- Research has any SELL row AND `scrip_df is None/empty` → `ValueError("Sell orders are present but no Scrip-wise Report was provided.")`
+- Research has any BUY row AND `bank_book` is empty/None → `ValueError("Buy orders are present but no Bank Book was provided.")`
+
+The guards are **defensive on the existing session file too**: if `existing_session_df`
+contains a SELL row (e.g. a pending sell from batch 1), the scrip-wise requirement still
+applies even when today's research is buy-only. Same for BUYs and bank book. This matches
+the smart-file-requirements UI which combines directions from research + existing session.
 
 **Sell logic** (vectorised merge):
 - Merge on (OFIN, ISIN) — ISIN-based, so format-agnostic regardless of what's in Ticker
@@ -426,20 +478,40 @@ For each ISIN+Direction group:
 ## 9. All Screens — What Each Does
 
 ### Part 1 — Step 1: Upload & Configure
-- 3 mandatory upload cards (gold-bordered): Research File, Bank Book, Scrip-wise Report
-- 1 optional upload card: Existing Session File (for 2nd+ batch of day)
+- 3 upload cards (gold-bordered): Research File (always required), Bank Book, Scrip-wise Report
+- 4th upload card appears when "Multiple Batches of the Day" is checked: Existing Session File
 - All cards accept both `.xls` and `.xlsx`
 - Tolerance % number input (default 0.0, step 0.5; warning banner shown if > 5%)
 - Gold "Validate Orders" button — parses all files, runs validation, advances to Step 2
-- If any required file is missing, button is disabled
+
+**Smart file requirements (Option D — auto-detect + soft override):**
+- As soon as the research file uploads, its Direction column is parsed (lightly, cached
+  by `(file.name, file.size)` in `st.session_state` so re-renders don't re-parse).
+- The same applies to the existing session file in multi-batch mode.
+- Bank Book is "needed" iff any BUY exists in research OR session; Scrip-wise iff any SELL.
+- Cards that aren't needed are **dimmed** (label opacity 0.4, no `*` asterisk, dropzone opacity 0.45)
+  but stay fully uploadable — soft override.
+- The Validate button enables iff: Research present AND (no BUY OR Bank present) AND
+  (no SELL OR Scrip present) AND (batch mode → Existing Session present).
+- The "Missing: X" hint under the disabled button names the specific file(s) needed.
+
+**Detection-error banner:**
+- If the research file (or existing session file) can't be parsed, OR contains any Direction
+  value other than the canonical BUY/SELL after alias normalisation, a red banner shows
+  above the cards: *"Research file has unrecognised Direction value(s): X, Y. Please correct
+  the file and re-upload."*
+- Validate stays disabled while an error is active.
+- Errors are cached against the file's identity so a known-bad file isn't re-parsed every rerun.
 
 ### Part 1 — Step 2: Validate Orders
 - Centered title "Validate Orders"
 - Split-badge status bar: `Orders Ready | N` (green) and `Orders Blocked | N` (red)
-- Two action buttons: "Exclude All RED" (red-tinted) + "Exclude Entire Batch" (dark)
-- Split table — two columns side-by-side:
-  - Left (0.7): `st.data_editor` with Include checkbox only. Red rows: checkbox disabled.
-  - Right (8.3): `st.dataframe` with pandas Styler — row background colours, text wrap
+- Two action buttons: "Exclude all red" (red-tinted) + "Exclude entire batch" (dark)
+  — labels are lowercase; the JS that styles them matches these exact strings, so don't change the casing.
+- **Single `st.data_editor`** holding both the Include checkbox AND the styled display data
+  (merged from the earlier split-table pattern in commit `14a2a7a`). Pandas Styler applies row
+  background colours (green/red) and `.format()` to render GREEN/RED → READY/BLOCKED and
+  comma-format the Amount column. All non-Include columns are passed to `disabled=[...]`.
 - Table column order: `No. | Client | Ticker | Dir | Qty | Available/Held | Amount | Status | Reason`
   - **Amount** = Qty × Ref Price, tolerance-adjusted worst-case:
     - Buy: `× (1 + tol%)`, Sell: `× (1 - tol%)`
@@ -529,6 +601,18 @@ Allocation file has no batch number — it corresponds to the full session, not 
 | Tolerance not in broker file | Tolerance is purely an internal cash buffer check. Broker receives plain Ref Price. (Option 4 — explicitly decided.) |
 | JS MutationObserver for ISIN button | `st.markdown('<div class="x">')` + `st.file_uploader` renders as DOM siblings, not parent-child. CSS descendant selectors fail. JS stamps the class directly onto the `stFileUploader` DOM element after render. |
 | `TextColumn` for Amount (not `NumberColumn`) | `%,.2f` sprintf format with comma is not supported by Streamlit's column_config. Comma formatting done via pandas Styler lambda `f"{v:,.2f}"` + `TextColumn` to display the string. |
+| Smart file requirements (Option D) | Buy-only days don't need Scrip-wise; sell-only days don't need Bank Book. Forcing ops to upload an irrelevant file is daily friction. Decision: auto-detect from research file (peek at Direction column on upload), dim the unneeded card, but keep it uploadable as a soft override. Rejected: explicit "Order Type" radio toggle (extra click for ops + redundant — research file already says) and lazy validate-time enforcement (worst UX — errors only after click). |
+| Defensive multi-batch direction check | The "needed files" decision uses the union of directions from today's research file AND any uploaded existing session file. A pending SELL from batch 1 still forces Scrip-wise even on a buy-only day today. Both the UI gating and the validator's hard guard apply this — UI prevents the case, validator catches it if UI is bypassed. |
+| Direction alias map (lenient at the reader, strict elsewhere) | 27 common synonyms (`Purchase`, `Sale`, `B`, `S`, `Long`, `Short`, `Buying`, `Selling`, `Add`, `Trim`, `Acquire`, `Dispose`, `Entry`, `Exit`, etc.) map to canonical BUY/SELL at the reader. Anything else surfaces as a strict error before Validate. The strict policy was a deliberate decision — silently accepting unknown values risks blank validation results downstream. |
+| Blank-Direction rows dropped at read time | Research / session Excel files often have trailing totals or summary rows where only one cell (typically Amount) is filled. These aren't orders. The reader drops any row where Direction is empty/None/NaN. Without this fix, a trailing totals row was triggering an unrecognised-Direction error in the UI. |
+| Direction detection cached by `(file.name, file.size)` | Streamlit's per-interaction rerun cycle would re-parse the research file dozens of times per session. Cache key = file identity tuple → cache invalidates automatically when ops uploads a different file. Failure results are cached **as the exception object**, so a known-bad file isn't re-parsed every rerun. |
+| Detection error blocks Validate | When research / session contains an unrecognised Direction or fails to parse, the helper raises. `p1_upload` catches and shows a red banner; Validate stays disabled. Ops must fix the file and re-upload (rather than the tool silently dropping bad rows). |
+| Card dimming via JS class-stamping | Streamlit renders the upload-label markdown and the file_uploader as DOM siblings (not parent-child). CSS descendant selectors can't link them. JS in `p1_upload` finds every `.upload-label-dimmed` and stamps `.card-dimmed` onto the corresponding `stFileUploader` (and removes the class when the label is no longer dimmed). MutationObserver re-runs on every Streamlit DOM update. |
+| Soft override (dimmed but uploadable) | A "not needed today" upload card stays clickable. Ops can still upload if they want; the file is accepted and used downstream as normal. The card just looks muted. Rationale: never destroy ops's uploads silently if their workflow expectation differs from the auto-detection. |
+| Optional `bank_book` / `scrip_df` in validator | The validator's signature was changed to accept `None` for these. Existing tests pass non-None values so they're backward-compatible. Hard guards inside the validator reject the mismatched combinations (sells with no scrip, buys with no bank) defensively — the UI prevents this case but the validator doesn't trust the UI. |
+| Single `data_editor` for the validate table | Earlier versions used a side-by-side split: narrow `data_editor` for the Include checkbox + wide `dataframe` for the styled display, with page scroll keeping rows visually in sync. Merged in commit `14a2a7a` — `st.data_editor` now accepts a Styler directly so row colours, formatted Amount, and the Include checkbox all live in one component. Simpler code, no JS height-matching needed. |
+| Precomputed name-token index for fuzzy ISIN lookup | `lookup_isin_by_name` previously re-tokenised all 5,324 DB names on every call. `build_name_token_index` runs once per validation pass; the validator builds it alongside the existing ticker index and passes both into `_lookup_isin_for_row`. Backward-compatible — calling `lookup_isin_by_name(name, db)` without the precomputed index still works (builds it on the fly). |
+| `read_session_file` cleans CP Code "nan" back to "" | `dtype=str` in `pd.read_excel` turns blank cells into the literal string `"nan"`, which is truthy. The allocator's "if CP Code blank, use InCred fallback" check silently failed and `"nan"` ended up in the allocation file's CP CODE column. Real production bug, caught by the InCred end-to-end test. Fix: reader replaces `"nan"` in the CP Code column with `""` before returning. Regression-tested in `tests/test_reader.py`. |
 
 ---
 
@@ -554,6 +638,8 @@ st.markdown(CSS, unsafe_allow_html=True)
 | Hide "Press Enter" hint | `[data-testid="InputInstructions"] { display: none !important; }` |
 | Scrollbar | Thin (4px), gold thumb (`#D9B244`), gold-dark hover |
 | ISIN update button | `.isin-uploader-btn` class stamped by JS — collapses dropzone to 42px button, grey default, gold hover |
+| Dimmed upload label | `.upload-label.upload-label-dimmed { opacity: 0.40 }` — used on Bank Book / Scrip-wise when not needed for today's orders |
+| Dimmed upload card | `[data-testid="stFileUploader"].card-dimmed` — class stamped by JS in `p1_upload`. Sets dropzone opacity 0.45, neutral border, muted background. Hover lifts opacity to 0.75 to signal still uploadable. Uploaded files in a dimmed card stay visible at 0.55 opacity. |
 
 **JS patterns used in the app:**
 
@@ -564,6 +650,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 | Exclude button colours | Validate step | MutationObserver + setInterval stamps `.exclude-red` / `.exclude-batch` classes |
 | Download Both | Export step | JS queries `a.dl-badge`, clicks [0], setTimeout 400ms, clicks [1] |
 | ISIN update button | ISIN Database tab | MutationObserver stamps `isin-uploader-btn` class on `stFileUploader` DOM element |
+| Dimmed upload card | Part 1 Step 1 | For every `.upload-label-dimmed`, walks up the DOM to find the adjacent `stFileUploader` and stamps `.card-dimmed` on it. Cleanup pass removes the class from any uploader whose column no longer has a dimmed label (so the flip is bidirectional when ops swaps research files). |
 
 ---
 
@@ -571,7 +658,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 | File | Sheet | Key Columns | Notes |
 |------|-------|-------------|-------|
-| Research File | `Orders` (flexible — scans all sheets if not found) | S.No, OFIN, Client, Ticker, Direction, Qty, Ref Price, Value, CP Code | Flexible column aliases. Client names suffix-stripped. |
+| Research File | `Orders` (flexible — scans all sheets if not found) | S.No, OFIN, Client, Ticker, Direction, Qty, Ref Price, Value, CP Code | Flexible column aliases. Client names suffix-stripped. Direction accepts 27 synonyms (Purchase, Sale, B, S, Long, Short, Buying, Selling, Acquire, Dispose, Entry, Exit, etc.) all mapping to canonical BUY/SELL. Blank-Direction rows (trailing totals) silently dropped. |
 | Bank Book | `Bank Balance Summary` | OFIN Code, Balance | Dynamic header scan. Skip rows with "total" anywhere. |
 | Scrip-wise Report | First sheet (name changes daily) | Scrip Name, Item No (=ISIN), Client Code (=OFIN), Quantity | Skip "Scrip Total" rows and blank rows. |
 | Session File | Sheet index 0 | S.No, Batch, OFIN, Client, Ticker, ISIN, Direction, Qty, Ref Price, CP Code | Output of Part 1, input of Part 2. |
@@ -614,6 +701,11 @@ st.markdown(CSS, unsafe_allow_html=True)
 | `6d3ab85` | Fix NameError: read tolerance from st.session_state in Step 2 |
 | `9c962b1` | Update all three handoff docs to reflect current state |
 | `309835d` | Fix two inaccuracies in handoff docs (deployment URL, ISIN UI) |
+| `14a2a7a` | Merge split table into single data_editor with Styler row colours |
+| `3213bfd` | Precompute name-token index for fuzzy ISIN lookup |
+| `0361cbb` | Smart file requirements: skip Bank Book / Scrip-wise when not needed |
+| `b0c2ca9` | Visual greying, detection error UX, Direction alias map, CP Code round-trip fix |
+| `3333e35` | Test suite expansion: 38 → 86 tests across 5 new files |
 
 ---
 
@@ -630,15 +722,30 @@ st.markdown(CSS, unsafe_allow_html=True)
 - **`tolerance` in Step 2** — widget `key="p1_tolerance"` only renders in Step 1. Step 2 reads `st.session_state.get("p1_tolerance", 0.0)`. Never use `tolerance` as a bare local variable in Step 2 code.
 - **InputTurnOver precision** — computed at 4dp and stored at full float64 precision in the cell. Excel number format `"0.00"` shows 2dp by default; user can click "Increase Decimal" to see more.
 - **Scrip-wise sheet name** — changes daily (named after the first client). Code always reads by index 0, not by name. CLAUDE.md spec says `Sheet: file` — this was the original spec but the code handles any sheet name.
+- **CP Code "nan" round-trip** — `dtype=str` in `pd.read_excel` reads blank cells as the literal string `"nan"`, which is truthy. The session-file reader explicitly resets `"nan"` CP Codes to `""` before returning. Without this, the allocator's "if CP Code blank, use InCred fallback" check silently fails and `"nan"` ends up in the CP CODE column of the allocation file. Don't remove that cleanup; regression-tested in `tests/test_reader.py::test_session_file_blank_cp_code_round_trips_as_empty_string`.
+- **Direction detection cache** — `_detect_research_directions` / `_detect_session_directions` cache by `(file.name, file.size)` in `st.session_state`. Failure results are cached as the exception object too — a known-bad file isn't re-parsed every Streamlit rerun. Cache invalidates automatically when ops uploads a different file.
+- **Card dimming targets DOM siblings** — `st.markdown('<div class="upload-label-dimmed">')` + `st.file_uploader` render as siblings in the column, not parent-child. CSS like `.upload-label-dimmed + [data-testid="stFileUploader"]` doesn't work because Streamlit wraps both in extra divs. JS walks the column container instead. Same pattern as the ISIN button — see CSS architecture section.
+- **Detection error doesn't auto-clear** — if ops uploads a bad research file, the error banner shows. They need to delete or replace the file to clear the cached error. Re-uploading the same file under the same `(name, size)` will hit the cached exception. Different file → fresh detection.
 
 ---
 
 ## 16. What Is Not Yet Done / Out of Scope
 
-- **Full test suite** — `tests/` folder has structure but coverage is not complete.
+- **Test suite — 86 tests** across `test_validator.py` (20), `test_allocator.py` (11), `test_isin.py` (9), `test_reader.py` (20), `test_matcher.py` (7), `test_parser.py` (7), `test_writer.py` (14), `test_integration.py` (3, including buy-only Ambit end-to-end and sell-only InCred end-to-end). Coverage now includes:
+  - Validator core logic + new optional-file paths + hard guards (incl. defensive multi-batch)
+  - Allocator weights, residual logic, CP-code fallback (session vs InCred priority)
+  - ISIN lookup (NSE/BSE/case/whitespace) + fuzzy name match with precomputed index
+  - Reader Direction normalisation, blank-row drop, bank book + scrip-wise edge cases, session-file CP-Code round-trip regression
+  - Matcher case-insensitive ISIN matching, not-executed / unexpected detection
+  - Parser normalisation (Ambit + InCred), InCred CP-code dict
+  - Writer allocation file formatting (every cell-level format property)
+  - End-to-end pipeline (research → validate → session/broker → match → allocate → allocation file)
+- **Still untested**: the `app.py` UI helpers themselves (detection helpers, button gating, dimming JS) — they're tightly bound to Streamlit `session_state` and best smoke-tested in the live app. The matcher's dual-exchange placeholder code path is intentionally untested per earlier decision.
+- **Dual-exchange handling** — matcher contains placeholder code (`matcher.py` 49-54) that does nothing functional. Allocator groups on ISIN+Direction only, not Exchange. If the same ISIN ever trades on NSE+BSE same day, the matcher silently picks the first broker row and allocator uses only that exchange's totals. Decided to leave as-is: rare in practice, fix when needed.
 - **ISIN database edit/delete** — intentionally out of scope. Adding new ISINs is available via UI (single entry form + bulk CSV upload). Editing or deleting existing entries: research team does this directly in `data/isin_database.csv`.
 - **Email integration** — out of scope.
 - **Tolerance in broker file** — decided to keep out. Tolerance is an internal cash buffer check only. Broker file always shows plain Ref Price.
+- **"Detected: N buys, M sells" sanity-check banner** — proposed during Option D design as a way for ops to catch wrong-file uploads (stale research file etc.). Decided against: UI is cleaner without it.
 
 ---
 
@@ -674,4 +781,4 @@ See `HOW_TO_HANDOFF.md` for the exact starting prompt to use in a new LLM sessio
 
 ---
 
-*Last updated: after commit 309835d*
+*Last updated: after commit 3333e35*

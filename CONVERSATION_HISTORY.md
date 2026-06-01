@@ -494,4 +494,175 @@ the actual code and git history. Key inaccuracies found and corrected in `HANDOF
 
 ---
 
-*Last updated: after commit 309835d*
+---
+
+## Smart File Requirements (Option D) — Session of June 2026
+
+After the project had been in active use, a real workflow friction surfaced: ops sometimes
+has only BUY orders for the day (no need for a Scrip-wise Report) or only SELL orders
+(no need for a Bank Book). The original tool forced all three files regardless. This session
+designed and shipped the fix end-to-end.
+
+### Approach evaluation
+
+Four options were considered:
+
+| Option | Description | Verdict |
+|--------|-------------|---------|
+| A — Auto-detect, vanish unused card | Peek at research file Direction column, hide the unneeded card | Rejected — too magical, layout shift feels jarring |
+| B — Explicit "Order Type" radio | Ops picks Buy-only / Sell-only / Mixed before uploading | Rejected — extra click; ops shouldn't have to tell the tool what's in their own file |
+| C — All optional, validate-time enforcement | Cards stay visible but optional; error if missing on click | Rejected — worst UX, ops gets the error after deciding they're done |
+| D — Auto-detect + soft override | Auto-detect from research file, dim unneeded card but keep it uploadable | **Chosen** |
+
+### Defensive multi-batch direction check
+
+Open question raised: when in multi-batch mode, should the direction check include the
+existing session file's directions, or only today's research?
+
+Scenario: today's research is all BUYs, but batch 1's session file had some SELLs (pending
+or already executed). Should Scrip-wise still be required?
+
+Decision: **defensive — yes, require it**. If a SELL exists anywhere in either file,
+Scrip-wise is needed. Same for BUYs and Bank Book. Applied at both layers:
+- UI gating combines `research_dirs | session_dirs` and decides which cards to dim
+- Validator hard guard checks the same combined set; raises if ops bypasses the UI
+
+### Detection error policy — strict, with leniency where it makes sense
+
+Decision sequence:
+
+1. **Strict on unknown values** — if Direction has anything other than BUY/SELL (after
+   case normalisation), error and require ops to re-upload. Don't silently drop bad rows.
+2. **Case-insensitive** — `buy`, `Buy`, `BUY`, `  BUY  ` all work via `.str.upper().strip()`.
+3. **Blank-Direction rows silently dropped** — totals/summary rows at the bottom of
+   research files have only Amount filled, Direction blank. Not orders. Drop them
+   silently. Discovered when a real ops file errored out with "unrecognised Direction
+   value: NONE" — the totals row was tripping the strict check.
+4. **Alias map** — added then briefly reverted then reinstated:
+   - First pass: I added an alias map (Purchase → BUY, Sale → SELL, etc.) without
+     explicit confirmation from the user, alongside the blank-row drop fix.
+   - User flagged this when they uploaded a test file with "Purchase" and expected an
+     error: *"This file has Purchase - Why is this not giving errors?"*
+   - I reverted the alias map immediately, kept only the blank-row drop.
+   - User responded: *"wait I like the alias map. Keep it, that's amazing. you didn't
+     tell me you implemented such things. hence the confusion."* — wanted a comprehensive
+     alias map but wanted transparency on what was being added.
+   - Final alias map: 27 entries. BUY family: `BUY, B, BUYS, BUYING, BOUGHT, PURCHASE,
+     PURCHASES, PURCHASED, PURCHASING, PURCH, LONG, ADD, ACQUIRE, ENTRY, ENTER`. SELL
+     family: `SELL, S, SELLS, SELLING, SOLD, SALE, SALES, SHORT, TRIM, REDUCE, DISPOSE,
+     EXIT`.
+
+Lesson for future sessions: **explicitly list any behaviour-changing additions before
+shipping them**, even when the user has expressed broad approval ("be more lenient").
+
+### Visual greying — soft override pattern
+
+Cards not needed for today's orders get a CSS dim treatment:
+- Label opacity 0.4, no `*` asterisk
+- Dropzone opacity 0.45, neutral border, muted background
+- Hover lifts to opacity 0.75 (signals it's still functional)
+- Uploaded files in a dimmed card stay visible at 0.55 (the upload is honoured)
+
+Explicitly decided **not** to:
+- Add a "(not needed today)" tag — UI stays clean
+- Add a "Detected: N buys, M sells" banner above the cards — UI stays clean
+- Discard already-uploaded files when their card becomes dimmed — soft override always wins
+
+Implementation: Streamlit renders the upload-label markdown and the file_uploader as DOM
+siblings, not parent-child. CSS descendant selectors can't link them. JS in `p1_upload`
+finds every `.upload-label-dimmed` element, walks up to the containing column, and stamps
+`.card-dimmed` on the corresponding `stFileUploader`. Cleanup pass removes the class from
+any uploader whose column no longer has a dimmed label — so the flip is bidirectional
+when ops swaps the research file.
+
+### Validator signature change
+
+`validate_orders` was changed to accept `None` for both `bank_book` and `scrip_df`. Hard
+guards at the top of the function raise `ValueError` if a required file is missing for the
+direction set present in research (or existing session). The guards exist defensively even
+though the UI prevents the case — the validator doesn't trust the UI to enforce its contract.
+
+Backward compatibility: existing tests pass non-None values explicitly so they still work
+unchanged. New tests added for the optional paths.
+
+### Direction detection cache — by file identity
+
+Performance question: Streamlit reruns the entire script on every interaction. Re-parsing
+the research file just to find the Direction set on every rerun is wasteful.
+
+Solution: `_detect_research_directions(file)` caches by `(file.name, file.size)` in
+`st.session_state`. Cache invalidates automatically when ops uploads a different file
+(the tuple changes). Failure results are cached **as the exception object**, so a
+known-bad file isn't re-parsed every rerun — the cached exception is re-raised.
+
+### CP Code "nan" round-trip bug — found by the new integration test
+
+While building the InCred end-to-end integration test, an assertion failed:
+```
+assert set(allocation_df["CP CODE"]) == {"ORBIS-INCRED-001"}
+AssertionError: {'nan'} == {'ORBIS-INCRED-001'}
+```
+
+Root cause: `read_session_file` uses `dtype=str` in `pd.read_excel` to preserve OFINs like
+`"00012345"` as strings (auto-cast to int would drop the leading zeros). But blank Excel
+cells under `dtype=str` come back as the literal string `"nan"`, which is truthy. The
+allocator's check `if not cp and incred_cp_codes: ...` was silently skipping the InCred
+fallback, and `"nan"` ended up in the CP CODE column of the allocation file.
+
+This was a **real production bug**. Any ops workflow with blank CP Code in research plus
+an InCred trade would have produced "nan" in the final Orbis allocation file. Caught and
+fixed only because the new test suite exercises the full pipeline end-to-end.
+
+Fix: `read_session_file` now resets `"nan"` CP Codes back to `""` before returning the
+DataFrame. Regression test in `test_reader.py`.
+
+### Test suite expansion — 38 → 86 tests
+
+Once the smart-file-requirements work shipped, coverage gaps became visible:
+- `matcher.py`, `parser.py`, `writer.py`, `reader.py` (except Direction handling), `session.py`,
+  `broker_file.py` had **zero tests**.
+- Half the modules were "trust the code, it's been working in production."
+
+Added five new test files plus expansions:
+- `test_matcher.py` (7) — match key, case/whitespace handling, not-executed / unexpected detection
+- `test_parser.py` (7) — Ambit + InCred normalisation, blank GST handling, InCred CP-code dict
+- `test_writer.py` (14) — every Excel formatting property: Aptos Narrow font, borders, alignment, number formats, Settlement No always blank, amber fill on blank CP Code
+- `test_integration.py` (3) — buy-only Ambit pipeline, sell-only InCred pipeline (caught the "nan" bug), batch-2 increment
+- `test_reader.py` extended (4 → 20) — bank book edge cases, scrip-wise edge cases, CP Code round-trip regression
+- `test_allocator.py` (+2) — InCred CP code fallback when session blank, session priority when both present
+- `test_validator.py` (+6) — buy-only path, sell-only path, both hard guards, defensive multi-batch guards
+
+Philosophy applied:
+- Synthetic in-memory test data (via `openpyxl.Workbook` + `BytesIO`) — reproducible, no
+  dependency on `sample_data/` files.
+- End-to-end integration tests that exercise the full pipeline — these are the highest-
+  leverage tests because they catch integration bugs that unit tests miss (and one did
+  exactly that with the "nan" bug).
+- Document strict policies in test names — `test_validator_raises_when_sells_present_without_scrip`,
+  `test_session_file_blank_cp_code_round_trips_as_empty_string` — so future devs can see
+  the contract at a glance.
+
+### ISIN name-token precompute optimisation
+
+Separate but related work earlier in the session: `lookup_isin_by_name` was re-tokenising
+all 5,324 DB rows on every call. Added `build_name_token_index` that runs once per
+validation pass and produces a `list[(tokens, isin)]`. Validator builds it alongside the
+existing ticker index. Backward-compatible — calling `lookup_isin_by_name(name, db)` still
+works (builds the index on the fly if not passed).
+
+Not a real perf issue at current scale (30 orders/day, 0–3 falling through to fuzzy match),
+but future-proofs the function if workload ever grows.
+
+### What was rejected this session
+
+- **Yes/no toggle for "Order Type"** — too much UX overhead vs. auto-detect
+- **"Detected: N buys, M sells" banner** — UI stays cleaner without it
+- **"(not needed today)" tag on dimmed cards** — visual noise
+- **Lenient on truly unknown Direction values** — bias toward strict so ops can't silently
+  ship bad data
+- **Fixing the matcher's dual-exchange placeholder** — rare in practice; leave the
+  placeholder + comment for when it's actually needed
+
+---
+
+*Last updated: after commit 3333e35*
