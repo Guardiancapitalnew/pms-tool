@@ -116,6 +116,28 @@ def test_settlement_no_always_blank():
     assert result["Settlement No"].isna().all() or (result["Settlement No"] == "").all()
 
 
+def test_incred_cp_code_used_when_session_cp_code_blank():
+    """When CP Code is blank in the session row and an InCred reply is
+    being processed, the allocator should fill it from incred_cp_codes."""
+    session = _make_session(["A", "B"], [100, 200], "INE111")
+    session["CP Code"] = ""  # blank everywhere
+    broker = _make_broker("INE111", "BUY", 300)
+    incred_cp = {"INE111": "ORBIS-INCRED-001"}
+    result = allocate_costs(session, broker, incred_cp_codes=incred_cp)
+    assert set(result["CP CODE"]) == {"ORBIS-INCRED-001"}
+
+
+def test_session_cp_code_takes_priority_over_incred():
+    """If the session file already has a CP Code, the InCred fallback must
+    NOT overwrite it - session is the source of truth."""
+    session = _make_session(["A", "B"], [100, 200], "INE222")
+    session["CP Code"] = "SESSION-CP-VALUE"
+    broker = _make_broker("INE222", "BUY", 300)
+    incred_cp = {"INE222": "ORBIS-INCRED-999"}
+    result = allocate_costs(session, broker, incred_cp_codes=incred_cp)
+    assert set(result["CP CODE"]) == {"SESSION-CP-VALUE"}
+
+
 def test_multibatch_sort_order():
     session = pd.DataFrame({
         "S.No": [1, 2, 1, 2],
