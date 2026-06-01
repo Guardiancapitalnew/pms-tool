@@ -96,6 +96,71 @@ def _require_columns(df: pd.DataFrame, required: list[str], source: str) -> None
 
 
 # ---------------------------------------------------------------------------
+# Direction normalisation
+# ---------------------------------------------------------------------------
+
+# Tokens that mean "no direction" - the row isn't actually an order.
+# Typically trailing totals/summary rows where Direction is None/blank.
+# These rows are silently dropped at parse time.
+_DIRECTION_BLANK_TOKENS = {"", "NAN", "NONE"}
+
+# Common synonyms that research / portfolio teams may write instead of the
+# canonical BUY / SELL. All inputs compared case-insensitively (after upper).
+# Anything not in this map AND not blank survives the reader and is surfaced
+# as an unrecognised-Direction error by the UI, so ops re-uploads.
+#
+# Two entries to review when business context shifts:
+#   LONG  -> BUY   (position state vs. transaction; rarely conflicts in PMS)
+#   SHORT -> SELL  (can specifically mean short-selling; mostly safe in PMS)
+_DIRECTION_ALIASES = {
+    # BUY family
+    "BUY":         "BUY",
+    "B":           "BUY",
+    "BUYS":        "BUY",
+    "BUYING":      "BUY",
+    "BOUGHT":      "BUY",
+    "PURCHASE":    "BUY",
+    "PURCHASES":   "BUY",
+    "PURCHASED":   "BUY",
+    "PURCHASING":  "BUY",
+    "PURCH":       "BUY",
+    "LONG":        "BUY",
+    "ADD":         "BUY",
+    "ACQUIRE":     "BUY",
+    "ENTRY":       "BUY",
+    "ENTER":       "BUY",
+    # SELL family
+    "SELL":        "SELL",
+    "S":           "SELL",
+    "SELLS":       "SELL",
+    "SELLING":     "SELL",
+    "SOLD":        "SELL",
+    "SALE":        "SELL",
+    "SALES":       "SELL",
+    "SHORT":       "SELL",
+    "TRIM":        "SELL",
+    "REDUCE":      "SELL",
+    "DISPOSE":     "SELL",
+    "EXIT":        "SELL",
+}
+
+
+def _is_order_row(direction_series: pd.Series) -> pd.Series:
+    """Boolean mask: True for rows whose Direction is a real (non-blank) value.
+    Filters out trailing summary rows where the Direction cell is empty."""
+    upper = direction_series.astype(str).str.strip().str.upper()
+    return ~upper.isin(_DIRECTION_BLANK_TOKENS)
+
+
+def _normalise_direction(s: pd.Series) -> pd.Series:
+    """Strip + uppercase + map common synonyms to canonical BUY/SELL.
+    Unrecognised non-blank values pass through unchanged so downstream
+    detection can surface them as a clear error."""
+    upper = s.astype(str).str.strip().str.upper()
+    return upper.map(_DIRECTION_ALIASES).fillna(upper)
+
+
+# ---------------------------------------------------------------------------
 # Research Team File
 # ---------------------------------------------------------------------------
 
@@ -266,9 +331,16 @@ def read_research_file(file) -> pd.DataFrame:
 
     _require_columns(df, RESEARCH_REQUIRED, "Research file")
 
+    # Drop trailing summary/totals rows and any row with a blank Direction.
+    # Those aren't orders - silently filter them so ops doesn't see spurious errors.
+    df = df[_is_order_row(df["Direction"])].reset_index(drop=True)
+
     # Normalise
     df["OFIN"] = _normalise_ofin(df["OFIN"])
-    df["Direction"] = df["Direction"].astype(str).str.strip().str.upper()
+    # Map common Buy/Sell synonyms (Purchase, Sale, B, S, Long, Short, etc.)
+    # to canonical BUY/SELL. Genuinely unknown values pass through and are
+    # surfaced as a clear unrecognised-Direction error by the UI.
+    df["Direction"] = _normalise_direction(df["Direction"])
     df["Ticker"] = df["Ticker"].astype(str).str.strip()
     df["Client"] = (
         df["Client"].astype(str).str.strip()
@@ -468,11 +540,20 @@ def read_session_file(file) -> pd.DataFrame:
     df = _pd_read_excel(content, sheet_name=0, dtype=str)
     df.columns = [c.strip() for c in df.columns]
     _require_columns(df, SESSION_REQUIRED, "Session file")
+    # Same Direction handling as the research reader:
+    # drop blank-Direction rows, normalise aliases to canonical BUY/SELL.
+    df = df[_is_order_row(df["Direction"])].reset_index(drop=True)
     df["OFIN"] = _normalise_ofin(df["OFIN"])
+    df["Direction"] = _normalise_direction(df["Direction"])
     df["Qty"] = pd.to_numeric(df["Qty"], errors="coerce")
     df["Ref Price"] = pd.to_numeric(df["Ref Price"], errors="coerce")
     df["Batch"] = pd.to_numeric(df["Batch"], errors="coerce").astype("Int64")
     df["S.No"]  = pd.to_numeric(df["S.No"],  errors="coerce").astype("Int64")
+    # dtype=str above turns blank Excel cells into the literal string "nan".
+    # Reset CP Code blanks so the allocator's "if CP Code blank, use InCred
+    # fallback" logic actually triggers after a session-file round-trip.
+    df["CP Code"] = df["CP Code"].astype(str).str.strip()
+    df.loc[df["CP Code"].str.lower() == "nan", "CP Code"] = ""
     return df
 
 

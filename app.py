@@ -147,8 +147,31 @@ h1, h2, h3, h4, .section-title {
     text-transform: uppercase;
     margin-bottom: 7px;
     font-family: 'DM Sans', sans-serif;
+    transition: opacity 0.2s ease;
 }
 .upload-required { color: #D9B244; margin-left: 2px; }
+
+/* ── Dimmed state for cards not needed today (soft override - still uploadable)
+   The label uses upload-label-dimmed directly. The matching stFileUploader
+   gets card-dimmed stamped onto it by JS in p1_upload(). ── */
+.upload-label.upload-label-dimmed {
+    opacity: 0.40;
+}
+[data-testid="stFileUploader"].card-dimmed [data-testid="stFileUploaderDropzone"] {
+    opacity: 0.45;
+    border-color: #D5CFC7 !important;
+    background: #F5F2EC !important;
+}
+/* Hover lifts the dimming slightly so it's clear ops CAN still upload */
+[data-testid="stFileUploader"].card-dimmed [data-testid="stFileUploaderDropzone"]:hover {
+    opacity: 0.75;
+    border-color: rgba(217,178,68,0.4) !important;
+    background: #FAFAF8 !important;
+}
+/* A file uploaded into a dimmed card stays visible but the card remains dimmed */
+[data-testid="stFileUploader"].card-dimmed:has([data-testid="stFileUploaderFile"]) [data-testid="stFileUploaderDropzone"] {
+    opacity: 0.55;
+}
 
 /* ── Fade-in animation ───────────────────────── */
 @keyframes fadeSlide {
@@ -586,45 +609,83 @@ def get_isin_db():
 
 
 def _detect_research_directions(file) -> set[str]:
-    """Peek at the Direction column of a research file without running validation.
+    """Peek at the Direction column of a research file.
 
-    Cached by (file.name, file.size) in st.session_state so we don't re-parse
-    the file on every Streamlit rerun. Returns set() on any failure - the UI
-    falls back to "require both files" in that case.
+    Returns a subset of {"BUY", "SELL"}. Cached by (file.name, file.size)
+    in st.session_state. Raises ValueError if:
+      - the file can't be parsed at all, OR
+      - any Direction value is not strictly BUY/SELL (case-insensitive).
+    The caller in p1_upload catches this and shows an error banner; the
+    Validate button is also disabled while an error is active.
+
+    Failure results are cached as the exception object itself, so a broken
+    file isn't re-parsed on every Streamlit rerun.
     """
     if file is None:
         return set()
     cache_key = (file.name, file.size)
     cached = st.session_state.get("_research_dir_cache")
     if cached and cached[0] == cache_key:
-        return cached[1]
+        result = cached[1]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
     try:
         file.seek(0)
         df = read_research_file(file)
         file.seek(0)
-        dirs = set(df["Direction"].astype(str).str.strip().str.upper().unique())
-    except Exception:
-        dirs = set()
+        raw = set(df["Direction"].astype(str).str.strip().str.upper().unique())
+        unknown = raw - {"BUY", "SELL"}
+        if unknown:
+            raise ValueError(
+                f"Research file has unrecognised Direction value(s): "
+                f"{', '.join(sorted(unknown))}. Expected only 'BUY' or 'SELL'."
+            )
+        dirs = raw
+    except Exception as e:
+        err = e if isinstance(e, ValueError) else ValueError(
+            f"Could not read research file: {e}"
+        )
+        st.session_state["_research_dir_cache"] = (cache_key, err)
+        raise err
+
     st.session_state["_research_dir_cache"] = (cache_key, dirs)
     return dirs
 
 
 def _detect_session_directions(file) -> set[str]:
     """Peek at the Direction column of an existing session file.
-    Same caching pattern as _detect_research_directions."""
+    Same caching and error-raising contract as _detect_research_directions."""
     if file is None:
         return set()
     cache_key = (file.name, file.size)
     cached = st.session_state.get("_session_dir_cache")
     if cached and cached[0] == cache_key:
-        return cached[1]
+        result = cached[1]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
     try:
         file.seek(0)
         df = read_session_file(file)
         file.seek(0)
-        dirs = set(df["Direction"].astype(str).str.strip().str.upper().unique())
-    except Exception:
-        dirs = set()
+        raw = set(df["Direction"].astype(str).str.strip().str.upper().unique())
+        unknown = raw - {"BUY", "SELL"}
+        if unknown:
+            raise ValueError(
+                f"Session file has unrecognised Direction value(s): "
+                f"{', '.join(sorted(unknown))}. Expected only 'BUY' or 'SELL'."
+            )
+        dirs = raw
+    except Exception as e:
+        err = e if isinstance(e, ValueError) else ValueError(
+            f"Could not read existing session file: {e}"
+        )
+        st.session_state["_session_dir_cache"] = (cache_key, err)
+        raise err
+
     st.session_state["_session_dir_cache"] = (cache_key, dirs)
     return dirs
 
@@ -751,6 +812,47 @@ def p1_upload():
     # BEFORE rendering widgets - avoids chicken-and-egg ordering problem.
     batch_mode = st.session_state.get("p1_second_batch", False)
 
+    # ── Direction detection - decide which cards to dim BEFORE rendering them.
+    # session_state is populated by the uploader widgets via their keys, so we
+    # can read it before the widgets render in this rerun (same trick as
+    # batch_mode above).
+    research_file_preview = st.session_state.get("p1_research")
+    existing_file_preview = st.session_state.get("p1_existing") if batch_mode else None
+
+    # Each helper raises on parse failure or unrecognised Direction values;
+    # we catch and surface to ops via a banner (and block Validate below).
+    research_error: str | None = None
+    session_error:  str | None = None
+    research_dirs:  set[str] = set()
+    session_dirs:   set[str] = set()
+    try:
+        research_dirs = _detect_research_directions(research_file_preview)
+    except ValueError as e:
+        research_error = str(e)
+    try:
+        session_dirs = _detect_session_directions(existing_file_preview)
+    except ValueError as e:
+        session_error = str(e)
+
+    combined_dirs = research_dirs | session_dirs
+    # Default to "require both" when no research uploaded OR any detection error
+    if research_file_preview is None or research_error or session_error:
+        needs_bank, needs_scrip = True, True
+    else:
+        needs_bank  = "BUY"  in combined_dirs
+        needs_scrip = "SELL" in combined_dirs
+
+    def _label_html(text: str, needed: bool) -> str:
+        """Render an upload-label - asterisk + full opacity if needed,
+        dimmed-class + no asterisk if not. JS later stamps card-dimmed onto
+        the adjacent stFileUploader so the dropzone visually matches."""
+        if needed:
+            return (
+                f'<div class="upload-label">{text} '
+                f'<span class="upload-required">*</span></div>'
+            )
+        return f'<div class="upload-label upload-label-dimmed">{text}</div>'
+
     # ── Page title ─────────────────────────────────────────────────────────────
     st.markdown(
         '<div style="margin:0.3rem 0 1.4rem 0;text-align:center">'
@@ -758,10 +860,22 @@ def p1_upload():
         'font-size:2rem;font-weight:600;color:#1C1714;line-height:1;'
         'margin-bottom:5px">Upload Files</div>'
         '<div style="font-size:0.83rem;color:#958F87;font-family:\'DM Sans\',sans-serif;'
-        'font-weight:300">Provide the three mandatory Orbis reports and configure batch settings.</div>'
+        'font-weight:300">Upload the Orbis reports needed for today\'s orders.</div>'
         '</div>',
         unsafe_allow_html=True,
     )
+
+    # ── Detection-error banner (unrecognised Direction values or parse failure)
+    if research_error or session_error:
+        msg = research_error or session_error
+        st.markdown(
+            f'<div style="background:rgba(220,38,38,0.05);'
+            f'border:1px solid rgba(220,38,38,0.2);border-left:3px solid #dc2626;'
+            f'border-radius:6px;padding:0.75rem 1rem;font-size:0.82rem;color:#b91c1c;'
+            f'margin-bottom:1rem;font-family:\'DM Sans\',sans-serif;font-weight:400">'
+            f'⚠  {msg} Please correct the file and re-upload.</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Upload cards (3 or 4 depending on batch_mode) ─────────────────────────
     existing_file = None
@@ -770,28 +884,28 @@ def p1_upload():
         _CARD_COLS = [1, 2, 0.4, 2, 0.4, 2, 1]
         _, col1, _, col2, _, col3, _ = st.columns(_CARD_COLS)
         with col1:
-            st.markdown('<div class="upload-label">Research Team File <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Research Team File", True), unsafe_allow_html=True)
             research_file = st.file_uploader("Research Team File", type=["xlsx", "xls"], key="p1_research", label_visibility="collapsed")
         with col2:
-            st.markdown('<div class="upload-label">Orbis Bank Book <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Orbis Bank Book", needs_bank), unsafe_allow_html=True)
             bank_file = st.file_uploader("Orbis Bank Book", type=["xlsx", "xls"], key="p1_bank", label_visibility="collapsed")
         with col3:
-            st.markdown('<div class="upload-label">Scrip-wise Report <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Scrip-wise Report", needs_scrip), unsafe_allow_html=True)
             scrip_file = st.file_uploader("Scrip-wise Report", type=["xlsx", "xls"], key="p1_scrip", label_visibility="collapsed")
     else:
         _CARD_COLS = [0.5, 2, 0.32, 2, 0.32, 2, 0.32, 2, 0.5]
         _, col1, _, col2, _, col3, _, col4, _ = st.columns(_CARD_COLS)
         with col1:
-            st.markdown('<div class="upload-label">Research Team File <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Research Team File", True), unsafe_allow_html=True)
             research_file = st.file_uploader("Research Team File", type=["xlsx", "xls"], key="p1_research", label_visibility="collapsed")
         with col2:
-            st.markdown('<div class="upload-label">Orbis Bank Book <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Orbis Bank Book", needs_bank), unsafe_allow_html=True)
             bank_file = st.file_uploader("Orbis Bank Book", type=["xlsx", "xls"], key="p1_bank", label_visibility="collapsed")
         with col3:
-            st.markdown('<div class="upload-label">Scrip-wise Report <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Scrip-wise Report", needs_scrip), unsafe_allow_html=True)
             scrip_file = st.file_uploader("Scrip-wise Report", type=["xlsx", "xls"], key="p1_scrip", label_visibility="collapsed")
         with col4:
-            st.markdown('<div class="upload-label">Existing Session File <span class="upload-required">*</span></div>', unsafe_allow_html=True)
+            st.markdown(_label_html("Existing Session File", True), unsafe_allow_html=True)
             existing_file = st.file_uploader("Existing Session File", type=["xlsx", "xls"], key="p1_existing", label_visibility="collapsed")
 
     # ── Settings row 1 - Multiple Batches + Price Tolerance, centered together
@@ -823,22 +937,10 @@ def p1_upload():
                 unsafe_allow_html=True,
             )
 
-    # ── Smart file-requirement detection ─────────────────────────────────
-    # Peek at directions in today's research file + any existing session file.
-    # Defensive: a SELL anywhere (research or prior batches) means Scrip-wise
-    # is needed; a BUY anywhere means Bank Book is needed.
-    research_dirs = _detect_research_directions(research_file)
-    session_dirs  = _detect_session_directions(existing_file)
-    combined_dirs = research_dirs | session_dirs
-
-    # Default to "require both" until research is parsed; then refine.
-    if research_file is None:
-        needs_bank, needs_scrip = True, True
-    else:
-        needs_bank  = "BUY"  in combined_dirs
-        needs_scrip = "SELL" in combined_dirs
-
-    # Compose missing-file list for the hint message
+    # ── Compose missing-file list for the Validate-button hint message ──
+    # needs_bank / needs_scrip were already computed at the top of this
+    # function (before the upload cards rendered, so the labels could dim
+    # accordingly). Reuse them here instead of re-detecting.
     missing: list[str] = []
     if research_file is None:
         missing.append("Research File")
@@ -849,7 +951,8 @@ def p1_upload():
     if batch_mode and existing_file is None:
         missing.append("Existing Session File")
 
-    all_uploaded = not missing
+    # Block Validate while a detection error is showing - ops must fix the file
+    all_uploaded = (not missing) and (research_error is None) and (session_error is None)
 
     # ── Settings row 2 - Validate Orders button, right-aligned (under card 3)
     st.markdown('<div style="height:0.4rem"></div>', unsafe_allow_html=True)
@@ -910,6 +1013,57 @@ def p1_upload():
                 st.rerun()
             except ValueError as e:
                 st.error(str(e))
+
+    # ── JS: stamp .card-dimmed on file_uploaders whose label has .upload-label-dimmed
+    # The label markdown and the uploader render as siblings inside the same
+    # Streamlit column - JS walks the column to find the uploader to stamp.
+    # Same MutationObserver pattern used elsewhere in the app to survive
+    # Streamlit's per-interaction reruns.
+    components.html("""
+    <script>
+    (function() {
+        function syncDimmedCards() {
+            try {
+                var doc = window.parent.document;
+                var labels = doc.querySelectorAll('.upload-label-dimmed');
+                var dimmedColumns = new Set();
+
+                labels.forEach(function(label) {
+                    // Walk up until we hit something that contains the next uploader
+                    var node = label.parentElement;
+                    while (node && node !== doc.body) {
+                        var uploader = node.querySelector('[data-testid="stFileUploader"]');
+                        if (uploader) {
+                            uploader.classList.add('card-dimmed');
+                            dimmedColumns.add(uploader);
+                            break;
+                        }
+                        node = node.parentElement;
+                    }
+                });
+
+                // Cleanup: any uploader currently marked dimmed but whose column
+                // no longer holds a .upload-label-dimmed (e.g. user re-uploaded
+                // a different research file and the needs flipped) should
+                // un-dim. Strict comparison against the just-built set.
+                doc.querySelectorAll('[data-testid="stFileUploader"].card-dimmed').forEach(function(u) {
+                    if (!dimmedColumns.has(u)) {
+                        u.classList.remove('card-dimmed');
+                    }
+                });
+            } catch(e) { /* cross-origin / DOM-not-ready guard */ }
+        }
+
+        try {
+            new MutationObserver(function() {
+                setTimeout(syncDimmedCards, 100);
+            }).observe(window.parent.document.body, {childList: true, subtree: true});
+        } catch(e) {}
+        setInterval(syncDimmedCards, 600);
+        setTimeout(syncDimmedCards, 200);
+    })();
+    </script>
+    """, height=0)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
