@@ -11,7 +11,10 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from utils.isin import load_isin_database, add_isin_entry, bulk_update_isin_database
+from utils.isin import (
+    load_isin_database, add_isin_entry, bulk_update_isin_database,
+    build_reverse_isin_index,
+)
 from utils.reader import (
     read_research_file, read_bank_book, read_scrip_wise_report,
     read_session_file,
@@ -219,7 +222,7 @@ h1, h2, h3, h4, .section-title {
 .info-banner {
     background: #FBF5E3;
     border: 1px solid rgba(217,178,68,0.2);
-    border-left: 3px solid #D9B244;
+    border-top: 3px solid #D9B244;
     border-radius: 6px;
     padding: 0.8rem 1rem;
     font-size: 0.83rem;
@@ -608,6 +611,13 @@ def get_isin_db():
     return load_isin_database()
 
 
+@st.cache_data
+def get_isin_reverse_index() -> dict[str, str]:
+    """Cached ISIN → Ticker (NSE/BSE) lookup for the Part 2 warning banners.
+    Cleared together with the ISIN DB whenever the database is updated."""
+    return build_reverse_isin_index(load_isin_database())
+
+
 def _detect_research_directions(file) -> set[str]:
     """Peek at the Direction column of a research file.
 
@@ -870,7 +880,7 @@ def p1_upload():
         msg = research_error or session_error
         st.markdown(
             f'<div style="background:rgba(220,38,38,0.05);'
-            f'border:1px solid rgba(220,38,38,0.2);border-left:3px solid #dc2626;'
+            f'border:1px solid rgba(220,38,38,0.2);border-top:3px solid #dc2626;'
             f'border-radius:6px;padding:0.75rem 1rem;font-size:0.82rem;color:#b91c1c;'
             f'margin-bottom:1rem;font-family:\'DM Sans\',sans-serif;font-weight:400">'
             f'⚠  {msg} Please correct the file and re-upload.</div>',
@@ -1208,7 +1218,7 @@ def p1_validate():
     if red_included > 0:
         st.markdown(
             f'<div style="background:rgba(220,38,38,0.05);'
-            f'border:1px solid rgba(220,38,38,0.18);border-left:3px solid #dc2626;'
+            f'border:1px solid rgba(220,38,38,0.18);border-top:3px solid #dc2626;'
             f'border-radius:6px;padding:0.7rem 1rem;font-size:0.82rem;color:#b91c1c;'
             f'margin-top:0.6rem;font-family:\'DM Sans\',sans-serif;font-weight:400">'
             f'⚠  {red_included} blocked row(s) still marked as included - '
@@ -1455,7 +1465,16 @@ def p1_export():
         'Broker File Preview</div>',
         unsafe_allow_html=True,
     )
-    st.dataframe(broker_file_df.style.set_properties(**{"white-space": "normal"}), use_container_width=True, hide_index=True)
+    # Format Total Qty and Ref Price to 2 dp for clean display in the preview
+    broker_preview = (
+        broker_file_df.style
+        .format({
+            "Total Qty": "{:,.2f}",
+            "Ref Price": "{:,.2f}",
+        })
+        .set_properties(**{"white-space": "normal"})
+    )
+    st.dataframe(broker_preview, use_container_width=True, hide_index=True)
 
     # ── Bottom action row ─────────────────────────────────────────────────────
     st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
@@ -1550,6 +1569,15 @@ def p2_upload():
             try:
                 session_df = read_session_file(session_file)
 
+                # Save ISIN -> Ticker map so the Part 2 summary can show
+                # friendly tickers (TCS, HDFCBANK) instead of bare ISINs.
+                # Last-write-wins on duplicates is fine - one ISIN always
+                # maps to the same Ticker within a session file.
+                st.session_state["p2_isin_ticker_map"] = dict(zip(
+                    session_df["ISIN"].astype(str).str.strip().str.upper(),
+                    session_df["Ticker"].astype(str),
+                ))
+
                 incred_cp_codes = None
                 if broker_choice == "Ambit":
                     broker_df = parse_ambit_reply(broker_file)
@@ -1624,28 +1652,41 @@ def p2_results():
     )
 
     # ── Warnings ─────────────────────────────────────────────────────────────
+    # Resolve ISINs to friendly Tickers for the banners below.
+    # Lookup priority (per ISIN):
+    #   1. Session map — Ticker as ops wrote it (only has ISINs from session file)
+    #   2. ISIN DB reverse index — NSE Code preferred, BSE fallback
+    #   3. Raw ISIN — last-resort fallback for unknown ISINs
+    _session_ticker_map = st.session_state.get("p2_isin_ticker_map", {})
+    _db_reverse_index   = get_isin_reverse_index()
+    def _friendly(isin: str) -> str:
+        key = str(isin).strip().upper()
+        return (
+            _session_ticker_map.get(key)
+            or _db_reverse_index.get(key)
+            or isin
+        )
+
     if not_executed:
-        isins = "  ·  ".join(not_executed)
+        names = ", ".join(_friendly(i) for i in not_executed)
         st.markdown(
             f'<div style="background:#FBF5E3;border:1px solid rgba(217,178,68,0.3);'
-            f'border-left:3px solid #D9B244;border-radius:6px;padding:0.75rem 1rem;'
+            f'border-top:3px solid #D9B244;border-radius:6px;padding:0.75rem 1rem;'
             f'font-size:0.82rem;color:#6B5718;margin-bottom:0.6rem;'
             f'font-family:\'DM Sans\',sans-serif;font-weight:400">'
-            f'⚠  {len(not_executed)} ISIN(s) in the session file were <strong>not executed</strong> '
-            f'by the broker and are excluded from allocation:<br>'
-            f'<span style="font-family:monospace;font-size:0.78rem">{isins}</span></div>',
+            f'{len(not_executed)} stock(s) in the session file were <strong>not executed</strong> '
+            f'by the broker and are excluded from allocation: {names}</div>',
             unsafe_allow_html=True,
         )
     if unexpected:
-        isins = "  ·  ".join(unexpected)
+        names = ", ".join(_friendly(i) for i in unexpected)
         st.markdown(
             f'<div style="background:rgba(220,38,38,0.04);border:1px solid rgba(220,38,38,0.18);'
-            f'border-left:3px solid #dc2626;border-radius:6px;padding:0.75rem 1rem;'
+            f'border-top:3px solid #dc2626;border-radius:6px;padding:0.75rem 1rem;'
             f'font-size:0.82rem;color:#b91c1c;margin-bottom:0.6rem;'
             f'font-family:\'DM Sans\',sans-serif;font-weight:400">'
-            f'⚠  {len(unexpected)} ISIN(s) appeared in the broker reply but were <strong>not in the '
-            f'session file</strong>:<br>'
-            f'<span style="font-family:monospace;font-size:0.78rem">{isins}</span></div>',
+            f'{len(unexpected)} stock(s) appeared in the broker reply but were <strong>not in the '
+            f'session file</strong>: {names}</div>',
             unsafe_allow_html=True,
         )
 
@@ -1665,10 +1706,27 @@ def p2_results():
             Total_Net=("InputNetAmount", "sum"),
         )
         .reset_index()
-        .rename(columns={"ISIN No": "ISIN", "Buy/ Sell": "Direction",
-                         "Total_Qty": "Total Qty", "Total_Net": "Total Net (₹)"})
+        .rename(columns={"Buy/ Sell": "Direction",
+                         "Total_Qty": "Total Qty",
+                         "Total_Net": "Total Net (₹)"})
     )
-    st.dataframe(summary.style.set_properties(**{"white-space": "normal"}), use_container_width=True, hide_index=True)
+    # Look up the friendly Ticker for each ISIN using the map captured in
+    # p2_upload. Fall back to the raw ISIN if it's not in the map (defensive
+    # against hand-edited session files where Ticker might be missing).
+    isin_to_ticker = st.session_state.get("p2_isin_ticker_map", {})
+    summary["Ticker"] = (
+        summary["ISIN No"].astype(str).str.strip().str.upper()
+        .map(isin_to_ticker)
+        .fillna(summary["ISIN No"])
+    )
+    summary = summary[["Ticker", "Direction", "Clients", "Total Qty", "Total Net (₹)"]]
+
+    styled_summary = (
+        summary.style
+        .format({"Total Net (₹)": "{:,.4f}"})  # 4dp display per ops preference
+        .set_properties(**{"white-space": "normal"})
+    )
+    st.dataframe(styled_summary, use_container_width=True, hide_index=True)
 
     # ── Download badge - centered split badge ─────────────────────────────────
     st.markdown('<div style="height:1.2rem"></div>', unsafe_allow_html=True)
@@ -1811,6 +1869,7 @@ def isin_page():
         try:
             added, skipped = bulk_update_isin_database(bulk_file)
             get_isin_db.clear()
+            get_isin_reverse_index.clear()  # keep banner lookups in sync
             st.session_state.isin_bulk_key = st.session_state.get("isin_bulk_key", 0) + 1
             if added > 0:
                 st.session_state.isin_bulk_msg = ("green", f"✓  {added:,} new ISINs added.")
@@ -1941,6 +2000,7 @@ def isin_page():
             try:
                 add_isin_entry(new_name, new_nse, new_bse, new_isin)
                 get_isin_db.clear()  # scoped clear - only evicts ISIN cache, not all caches
+                get_isin_reverse_index.clear()  # keep banner lookups in sync
                 st.success(f"✓  Added: {new_name or '-'}  ({new_isin.strip()})")
                 st.rerun()
             except ValueError as e:
@@ -1953,6 +2013,33 @@ def isin_page():
 
 def main():
     st.markdown(CSS, unsafe_allow_html=True)
+
+    # ── ISIN-page flash fix ───────────────────────────────────────────────
+    # The bulk-CSV uploader on the ISIN page is collapsed to a compact button
+    # via a JS-stamped .isin-uploader-btn class. That JS runs inside a
+    # components.html iframe which loads asynchronously, so for a brief moment
+    # after navigation, the uploader renders as a default big dropzone — a
+    # visible flash before snapping to the compact button. Streamlit also
+    # doesn't instantly tear down the previous page's DOM, so Part 1's upload
+    # cards can briefly bleed through during the transition.
+    #
+    # Fix: while we're on the ISIN page, hide any file_uploader that doesn't
+    # yet carry .isin-uploader-btn. Once the JS stamps the class on the bulk
+    # uploader, the second rule fades it in. Any unstyled uploaders left over
+    # from the previous page stay invisible until Streamlit clears them.
+    if st.session_state.get("section") == "isin":
+        st.markdown("""
+        <style>
+        [data-testid="stFileUploader"]:not(.isin-uploader-btn) {
+            opacity: 0 !important;
+            transition: opacity 0.18s ease;
+        }
+        [data-testid="stFileUploader"].isin-uploader-btn {
+            opacity: 1 !important;
+            transition: opacity 0.18s ease;
+        }
+        </style>
+        """, unsafe_allow_html=True)
 
     # JS: (1) stamp data-uploaded on dropzones, (2) equalize card heights by
     # measuring empty-state dropzones and applying that height to uploaded ones.

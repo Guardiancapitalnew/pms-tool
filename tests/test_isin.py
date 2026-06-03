@@ -1,7 +1,10 @@
 """Tests for utils/isin.py lookup logic."""
 import pytest
 import pandas as pd
-from utils.isin import lookup_isin, lookup_isin_by_name, build_name_token_index
+from utils.isin import (
+    lookup_isin, lookup_isin_by_name,
+    build_name_token_index, build_reverse_isin_index,
+)
 
 
 @pytest.fixture
@@ -70,6 +73,28 @@ def test_name_lookup_single_long_token(name_db):
 
 def test_name_lookup_returns_none_on_unknown(name_db):
     assert lookup_isin_by_name("RANDOM UNLISTED PRIVATE LTD", name_db) is None
+
+
+def test_reverse_isin_index_prefers_nse_code(db):
+    """ISIN → Ticker reverse lookup: NSE Code wins when present."""
+    idx = build_reverse_isin_index(db)
+    assert idx["INE237A01036"] == "KOTAKBANK"
+    assert idx["INE758E01017"] == "JIOFIN"
+
+
+def test_reverse_isin_index_falls_back_to_bse(db):
+    """When NSE Code is blank, the reverse map should use BSE Code."""
+    idx = build_reverse_isin_index(db)
+    # "BSE Only Co" has NSE Code "" and BSE Code "999001"
+    assert idx["INE999X01011"] == "999001"
+
+
+def test_reverse_isin_index_normalises_isin_keys_to_upper(db):
+    """Lookups happen with uppercased ISINs; the index keys must match."""
+    idx = build_reverse_isin_index(db)
+    # Every key is uppercased
+    for k in idx.keys():
+        assert k == k.upper()
 
 
 def test_name_lookup_precomputed_index_matches_fallback(name_db):

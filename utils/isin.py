@@ -55,6 +55,30 @@ def build_isin_index(db: pd.DataFrame) -> dict[str, str]:
     return index
 
 
+def build_reverse_isin_index(db: pd.DataFrame) -> dict[str, str]:
+    """Build the reverse lookup: ISIN → Ticker (NSE preferred, BSE fallback).
+
+    Used by the Part 2 UI to display friendly tickers in the "not executed"
+    and "unexpected ISIN" warning banners instead of raw ISIN codes.
+
+    Args:
+        db: DataFrame from load_isin_database()
+
+    Returns:
+        dict mapping uppercase ISIN → ticker string (NSE Code if present,
+        else BSE Code; empty string if both blank)
+    """
+    index: dict[str, str] = {}
+    for _, row in db.iterrows():
+        isin = row["ISIN Code"].strip().upper()
+        if not isin:
+            continue
+        # NSE preferred, BSE fallback (mirrors the forward index priority)
+        ticker = row["NSE Code"].strip() or row["BSE Code"].strip()
+        index[isin] = ticker
+    return index
+
+
 # ---------------------------------------------------------------------------
 # Lookup
 # ---------------------------------------------------------------------------
