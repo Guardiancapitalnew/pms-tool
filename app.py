@@ -1202,7 +1202,7 @@ def p1_validate():
             "Qty":               st.column_config.NumberColumn("Qty", format="%.2f", width="small"),
             "Value":             st.column_config.TextColumn("Amount", width="small"),
             "Status":            st.column_config.TextColumn("Status", width="small"),
-            "Units Held / Cash": st.column_config.TextColumn("Available / Held", width="medium"),
+            "Units Held / Cash": st.column_config.TextColumn("Bank Balance / Units Held", width="medium"),
             "Reason":            st.column_config.TextColumn("Reason", width="large"),
         },
         disabled=disabled_cols,
