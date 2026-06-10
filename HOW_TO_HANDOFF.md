@@ -150,7 +150,15 @@ After reading the three docs, the LLM will know:
 - [x] Detection-error banner — unrecognised Direction values surface a clear error before Validate
 - [x] Session-file CP Code round-trip fix — blank cells stay blank, not the string "nan"
 - [x] Single `data_editor` + Styler validation table (not the previous split-table pattern)
-- [x] 86-test suite covering matcher, parser, writer, allocator CP-code fallback, reader edge cases, end-to-end pipelines (Ambit + InCred)
+- [x] 89-test suite covering matcher, parser, writer, allocator CP-code fallback, reader edge cases, ISIN forward + reverse lookup, end-to-end pipelines (Ambit + InCred)
+- [x] Validate Orders column header is "Bank Balance / Units Held" (renamed from "Available / Held"); the value is bank balance for BUYs and units held for SELLs
+- [x] Part 1 Step 3 broker preview formats `Total Qty` and `Ref Price` to 2 decimal places + thousands separator (display only, Excel values unchanged)
+- [x] Part 2 Step 1 caches an `{ISIN: Ticker}` map in `st.session_state["p2_isin_ticker_map"]` right after the session file is parsed
+- [x] Part 2 Step 2 Allocation Summary table shows Ticker (not raw ISIN) in the first column; `Total Net (₹)` displays with 4 decimal places
+- [x] Part 2 Step 2 warning banners (amber "not executed", red "unexpected") display friendly Tickers via two-tier lookup (session map → ISIN DB reverse index → raw ISIN fallback). Banners are inline, no `⚠` icon, no monospace
+- [x] `utils/isin.build_reverse_isin_index(db)` — `{ISIN: ticker}` reverse map; NSE preferred, BSE fallback. Cached in `app.py` via `get_isin_reverse_index()`, cleared together with `get_isin_db` when the database is edited
+- [x] All alert / warning boxes use `border-top: 3px solid <accent>` (switched from `border-left`); same colours and widths
+- [x] ISIN-page flash fix — section-aware CSS in `main()` hides any unstamped `stFileUploader` while on the ISIN page so the bulk-CSV uploader doesn't briefly render as a big dropzone before JS collapses it
 
 ---
 
@@ -183,4 +191,4 @@ Kill a port:
 
 ---
 
-*Last updated: after commit 3333e35*
+*Last updated: after commit 9064de9*

@@ -278,6 +278,7 @@ Connector lines turn gold when done. Pure HTML/CSS, rendered via `st.markdown`.
 |----------|---------|
 | `load_isin_database()` | Reads `data/isin_database.csv`. Decorated with `@st.cache_data` in app.py via `get_isin_db()`. |
 | `build_isin_index(db)` | Returns `{UPPERCASE_TICKER: ISIN}` dict for O(1) lookups. BSE inserted first, NSE overwrites — NSE always wins. |
+| `build_reverse_isin_index(db)` | Returns `{ISIN: ticker}` reverse map. NSE Code preferred, BSE Code as fallback. Used by the Part 2 warning banners and summary table to display friendly tickers instead of raw ISINs. |
 | `build_name_token_index(db)` | Returns `list[(tokens, isin)]` pre-tokenised once per session. Used by `lookup_isin_by_name` to avoid re-tokenising all 5K DB rows on every call. |
 | `lookup_isin(ticker, db, _index)` | Returns ISIN string or None. Uses pre-built index if provided; else scans DataFrame. NSE Code priority, BSE fallback. |
 | `lookup_isin_by_name(company_name, db, _token_index=None)` | Fuzzy company name match — last resort for full names like "AU SMALL FINANCE BANK LTD". Accepts a precomputed `_token_index` from `build_name_token_index` for O(N) lookup; builds one on the fly if not provided. Returns ISIN or None. |
@@ -293,6 +294,14 @@ Connector lines turn gold when done. Pure HTML/CSS, rendered via `st.markdown`.
 Failures are cached **as the exception object** so a broken file isn't re-parsed every rerun.
 Callers in `p1_upload` wrap each call in `try/except ValueError` and surface the message in a
 red banner above the upload cards; the Validate button stays disabled while an error is active.
+
+### `app.py` — Part 2 friendly-name helpers
+| Helper | Purpose |
+|--------|---------|
+| `get_isin_reverse_index()` | `@st.cache_data`-cached wrapper around `build_reverse_isin_index(load_isin_database())`. Cleared together with `get_isin_db` whenever the ISIN DB is modified (single-entry add or bulk update both wire `.clear()` on both caches). |
+| `st.session_state["p2_isin_ticker_map"]` | Populated in `p2_upload` right after `read_session_file(session_file)` runs. A `{UPPER_ISIN: Ticker}` dict built from the session file's own Ticker column (Ticker as ops originally wrote it in research). Consumed by the summary table and warning banners on Step 2. |
+
+Used together in the **Part 2 Step 2** warning banners as a two-tier lookup: session map first (ISINs that were in the session file), reverse index second (ISINs that only appear in the broker reply — i.e. "unexpected" ISINs), raw ISIN as the last-resort fallback.
 
 **ISIN lookup priority** (used in `validator.py` for every order row):
 1. Scrip-wise report — exact Scrip Name match (case-insensitive uppercase)
@@ -512,14 +521,14 @@ For each ISIN+Direction group:
   (merged from the earlier split-table pattern in commit `14a2a7a`). Pandas Styler applies row
   background colours (green/red) and `.format()` to render GREEN/RED → READY/BLOCKED and
   comma-format the Amount column. All non-Include columns are passed to `disabled=[...]`.
-- Table column order: `No. | Client | Ticker | Dir | Qty | Available/Held | Amount | Status | Reason`
+- Table column order: `No. | Client | Ticker | Dir | Qty | Bank Balance / Units Held | Amount | Status | Reason`
   - **Amount** = Qty × Ref Price, tolerance-adjusted worst-case:
     - Buy: `× (1 + tol%)`, Sell: `× (1 - tol%)`
     - Formatted with comma separators (e.g. `1,23,456.78`)
   - **No.** (S.No): integer format, no decimals
   - **Qty**: 2 decimal places
   - **Status**: displays "READY" (green rows) or "BLOCKED" (red rows)
-  - **Available/Held** (Context): `"X,XXX Units"` for sells, `"Available: ₹X"` for buys
+  - **Bank Balance / Units Held** (Context): `"X,XXX Units"` for sells, `"Available: ₹X"` for buys. (Header reworded from "Available / Held" so ops can see at a glance which side they're looking at; internal session-state key still `"Units Held / Cash"`.)
 - Sticky bottom bar: "Generate Session File + Broker File" gold button
   - Disabled if: any RED row is still included OR zero rows included
   - On click: builds session file + broker file, advances to Step 3
@@ -531,7 +540,10 @@ For each ISIN+Direction group:
   - `Broker File | ⬇ Download broker_file_DD_MM_YYYY_batch_N.xlsx`
   - `Download Both Files` button (JS clicks both anchors with 400ms gap)
 - Batch number = `session_df["Batch"].max()`
-- Broker file preview table shown below download buttons
+- Broker file preview table shown below download buttons. `Total Qty` and
+  `Ref Price` are formatted to **2 decimal places + thousands separator** via
+  the pandas Styler (display only — the underlying Excel file's values are
+  unchanged).
 
 ### Part 2 — Step 1: Upload & Configure
 - Centered title "Upload & Configure" + subtitle
@@ -539,14 +551,24 @@ For each ISIN+Direction group:
 - Radio selector: Ambit / InCred
 - Broker reply file uploader
 - Gold "Process Allocation" button — parses, matches, allocates, advances to Step 2
+- **Caches an `{ISIN: Ticker}` map** in `st.session_state["p2_isin_ticker_map"]`
+  right after the session file parses, so Step 2 can show friendly tickers
+  instead of raw ISINs in the summary table and warning banners.
 
 ### Part 2 — Step 2: Review & Download
 - Centered title "Allocation Complete"
 - Two green split-badge blocks: `Stocks | N` and `Clients | N`
-- Warning banners if present:
-  - Amber: not-executed ISINs (in session, not in broker reply)
-  - Red: unexpected ISINs (in broker reply, not in session)
-- Allocation summary table
+- **Warning banners** (if present):
+  - Amber: stocks present in the session file but not executed by the broker
+  - Red: stocks present in the broker reply but missing from the session file
+  - Both banners show **friendly tickers** (e.g. `HDFCBANK`) rather than raw
+    ISINs. Two-tier lookup: session map first, then ISIN DB reverse index
+    (NSE preferred, BSE fallback), then raw ISIN as last resort.
+  - Styling: **no `⚠` icon**, **inline** (stock list immediately after the
+    colon — no `<br>`, no monospace), `border-top` accent (not `border-left`).
+- **Allocation summary table**: columns are `Ticker | Direction | Clients | Total Qty | Total Net (₹)`.
+  Ticker is the resolved friendly name (same lookup as the banners). `Total Net (₹)`
+  is formatted to **4 decimal places** + thousands separator per ops preference.
 - Split-badge download: `Orbis Allocation File | ⬇ Download orbis_allocation_DD_MM_YYYY.xlsx`
 
 ### ISIN Database Tab
@@ -613,6 +635,13 @@ Allocation file has no batch number — it corresponds to the full session, not 
 | Single `data_editor` for the validate table | Earlier versions used a side-by-side split: narrow `data_editor` for the Include checkbox + wide `dataframe` for the styled display, with page scroll keeping rows visually in sync. Merged in commit `14a2a7a` — `st.data_editor` now accepts a Styler directly so row colours, formatted Amount, and the Include checkbox all live in one component. Simpler code, no JS height-matching needed. |
 | Precomputed name-token index for fuzzy ISIN lookup | `lookup_isin_by_name` previously re-tokenised all 5,324 DB names on every call. `build_name_token_index` runs once per validation pass; the validator builds it alongside the existing ticker index and passes both into `_lookup_isin_for_row`. Backward-compatible — calling `lookup_isin_by_name(name, db)` without the precomputed index still works (builds it on the fly). |
 | `read_session_file` cleans CP Code "nan" back to "" | `dtype=str` in `pd.read_excel` turns blank cells into the literal string `"nan"`, which is truthy. The allocator's "if CP Code blank, use InCred fallback" check silently failed and `"nan"` ended up in the allocation file's CP CODE column. Real production bug, caught by the InCred end-to-end test. Fix: reader replaces `"nan"` in the CP Code column with `""` before returning. Regression-tested in `tests/test_reader.py`. |
+| Friendly Tickers in Part 2 summary + warning banners | Bare ISINs (e.g. `INE040A01034`) are unintelligible to ops at a glance. Step 2 now resolves every ISIN to its NSE ticker via a two-tier lookup: session map (Ticker as ops wrote it in research) → ISIN DB reverse index (`build_reverse_isin_index`, NSE preferred, BSE fallback) → raw ISIN as last resort. Used by both the Allocation Summary table column and the not-executed / unexpected warning banners. Works the same for Ambit and InCred since this is purely a UI-layer transformation. |
+| Reverse ISIN index cache invalidates with the forward index | `get_isin_reverse_index()` is `@st.cache_data`-cached for the lifetime of the Streamlit session. Both the single-entry add (`add_isin_entry`) and the bulk-update path now call `get_isin_reverse_index.clear()` alongside `get_isin_db.clear()` so the banner lookups stay in sync the moment a new ISIN is added to the DB. |
+| Warning banner styling: inline, no icon, `border-top` accent | Originally the not-executed / unexpected banners had a `⚠` icon prefix and rendered the ISIN list on a new line in monospace. Reworked to a single inline line — content immediately after the colon, no monospace — since the friendly tickers are short and read naturally in DM Sans. The `border-left: 3px solid` accent on every alert box in the app was simultaneously switched to `border-top: 3px solid` for visual consistency (same colours, same widths). |
+| Part 1 broker preview: 2dp display formatting | `Total Qty` and `Ref Price` in the broker file preview table on Step 3 are now formatted to 2 decimal places + thousands separator via a pandas Styler `format()` call. Display-only — the underlying broker Excel file is written through the generic writer and its values are not rounded. |
+| Part 2 Total Net 4dp display | `Total Net (₹)` column in the Allocation Summary table on Step 2 uses `{:,.4f}` formatting. Underlying allocation values are full precision; the 4dp is a display preference ops requested for verification against broker reports. |
+| Validate Orders column header: "Bank Balance / Units Held" | The Context column in the validate table shows two different things depending on row direction: bank balance for BUYs, units held for SELLs. Header was originally "Available / Held" which conflated the two concepts. Now spells out both names explicitly. Internal session-state key (`"Units Held / Cash"`) unchanged. |
+| ISIN-page flash fix — section-aware CSS | The bulk-CSV uploader on the ISIN Database page is collapsed to a compact "Update ISIN Database" button via a JS-stamped `.isin-uploader-btn` class. That JS runs inside a `components.html` iframe which loads asynchronously, so for ~200-500 ms after navigating to the ISIN page the uploader rendered as a default big dropzone — a visible flash. `main()` now injects a small `<style>` block specifically when `st.session_state.section == "isin"` that pre-emptively sets `opacity: 0` on any unstamped `stFileUploader`, with a fade-in transition once the class arrives. Also kills the brief bleed-through of Part 1 / Part 2 upload cards during the page transition. |
 
 ---
 
@@ -640,6 +669,8 @@ st.markdown(CSS, unsafe_allow_html=True)
 | ISIN update button | `.isin-uploader-btn` class stamped by JS — collapses dropzone to 42px button, grey default, gold hover |
 | Dimmed upload label | `.upload-label.upload-label-dimmed { opacity: 0.40 }` — used on Bank Book / Scrip-wise when not needed for today's orders |
 | Dimmed upload card | `[data-testid="stFileUploader"].card-dimmed` — class stamped by JS in `p1_upload`. Sets dropzone opacity 0.45, neutral border, muted background. Hover lifts opacity to 0.75 to signal still uploadable. Uploaded files in a dimmed card stay visible at 0.55 opacity. |
+| ISIN-page flash fix | Injected from `main()` only when `st.session_state.section == "isin"`. Sets `opacity: 0` on `[data-testid="stFileUploader"]:not(.isin-uploader-btn)` with a 180 ms fade-in once `.isin-uploader-btn` is stamped. Prevents the brief big-dropzone flash + bleed-through of Part 1 / Part 2 upload cards during navigation. |
+| Alert / warning border accent | All five alert boxes (`.info-banner` CSS class, p1_upload detection-error banner, p1_validate "blocked rows still included" warning, p2_results not-executed amber banner, p2_results unexpected red banner) use `border-top: 3px solid <accent>` — switched from `border-left` to `border-top` for visual consistency. Same colours (gold `#D9B244` for info/amber, red `#dc2626` for blocking) and same 3 px width. |
 
 **JS patterns used in the app:**
 
@@ -706,6 +737,10 @@ st.markdown(CSS, unsafe_allow_html=True)
 | `0361cbb` | Smart file requirements: skip Bank Book / Scrip-wise when not needed |
 | `b0c2ca9` | Visual greying, detection error UX, Direction alias map, CP Code round-trip fix |
 | `3333e35` | Test suite expansion: 38 → 86 tests across 5 new files |
+| `41e592f` | Docs: comprehensive update for smart file requirements + test suite expansion |
+| `17aa515` | Quality-of-life UI polish: ISIN-page flash fix, Part 1 broker preview 2dp, Part 2 Ticker display + 4dp Total Net, banner Ticker resolution + `build_reverse_isin_index`, simplified banner styling (no icon, inline), `border-left` → `border-top` on all alerts. Added 3 tests for the reverse index → 89 tests total. |
+| `b540680` | Data refresh: 9 new ISIN entries + updated InCred test fixture |
+| `9064de9` | Rename validate-orders column header "Available / Held" → "Bank Balance / Units Held" |
 
 ---
 
@@ -731,7 +766,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 ## 16. What Is Not Yet Done / Out of Scope
 
-- **Test suite — 86 tests** across `test_validator.py` (20), `test_allocator.py` (11), `test_isin.py` (9), `test_reader.py` (20), `test_matcher.py` (7), `test_parser.py` (7), `test_writer.py` (14), `test_integration.py` (3, including buy-only Ambit end-to-end and sell-only InCred end-to-end). Coverage now includes:
+- **Test suite — 89 tests** across `test_validator.py` (20), `test_allocator.py` (11), `test_isin.py` (12 — 9 forward lookups/fuzzy + 3 reverse-index), `test_reader.py` (20), `test_matcher.py` (7), `test_parser.py` (7), `test_writer.py` (14), `test_integration.py` (3, including buy-only Ambit end-to-end and sell-only InCred end-to-end). Coverage now includes:
   - Validator core logic + new optional-file paths + hard guards (incl. defensive multi-batch)
   - Allocator weights, residual logic, CP-code fallback (session vs InCred priority)
   - ISIN lookup (NSE/BSE/case/whitespace) + fuzzy name match with precomputed index
@@ -781,4 +816,4 @@ See `HOW_TO_HANDOFF.md` for the exact starting prompt to use in a new LLM sessio
 
 ---
 
-*Last updated: after commit 3333e35*
+*Last updated: after commit 9064de9*

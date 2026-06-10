@@ -665,4 +665,136 @@ but future-proofs the function if workload ever grows.
 
 ---
 
-*Last updated: after commit 3333e35*
+---
+
+## Quality-of-Life Polish — Second Pass (June 2026)
+
+After the smart-file-requirements work shipped (commit `3333e35`) and the
+handoff docs were updated (`41e592f`), the user came back with a sequence of
+small UX requests. These are smaller than the earlier sessions but still
+worth recording.
+
+### ISIN-page navigation flash
+
+User report: when navigating from Part 1 to the ISIN Database tab, the bulk-
+CSV upload control flashed as a big dropzone for ~1 second before snapping
+into the small "Update ISIN Database" button. Sometimes Part 1's upload cards
+also briefly bled through during the transition.
+
+Root cause: the JS that stamps `.isin-uploader-btn` on the uploader lives
+inside a `components.html` iframe, which loads asynchronously. The first
+paint shows the uploader in default Streamlit chrome; the class arrives
+shortly after.
+
+Fix (chosen over more invasive options): inject a section-aware `<style>`
+block in `main()` only when `st.session_state.section == "isin"`. The block
+pre-emptively sets `opacity: 0` on any `[data-testid="stFileUploader"]:not(.isin-uploader-btn)`
+with a 180 ms fade-in once the class lands. Side benefit: any leftover Part
+1 / Part 2 upload cards mid-transition also stay invisible until Streamlit
+clears them.
+
+Rejected alternatives:
+- DOM marker + sibling selectors — Streamlit's element-container wrapping
+  makes sibling selectors fragile
+- Inline `<script>` via `st.markdown` — Streamlit strips `<script>` tags
+- Move the JS to a synchronous earlier injection — `components.html` is
+  the only injection point that works reliably
+
+### Part 1 download page formatting
+
+User requested: `Total Qty` and `Ref Price` in the broker file preview
+should show 2 decimal places. Done via pandas Styler `format()` — display
+only, the underlying broker Excel file isn't touched. Discussed but
+deferred: also rounding the values in the Excel itself; user can come back
+if the broker complains about precision.
+
+### Part 2 friendly Tickers
+
+User requested: instead of showing bare ISINs like `INE040A01034` in the
+Allocation Summary table and the not-executed / unexpected warning banners,
+show the friendly Ticker (`HDFCBANK`).
+
+Design: two-tier lookup.
+1. **Session map** — built at Part 2 Step 1 right after `read_session_file`
+   runs, cached in `st.session_state["p2_isin_ticker_map"]`. Holds Ticker
+   exactly as ops wrote it in the research file. Covers the not-executed
+   case (those ISINs are in the session file by definition).
+2. **ISIN DB reverse index** — new `build_reverse_isin_index(db)` helper in
+   `utils/isin.py` returning `{ISIN: ticker}` (NSE preferred, BSE fallback).
+   Cached at app level via `get_isin_reverse_index()`. Covers the unexpected
+   case (ISINs that only appear in the broker reply).
+3. **Raw ISIN** — last-resort fallback for ISINs not in either source
+   (e.g. a brand-new listing).
+
+Both caches (`get_isin_db` and `get_isin_reverse_index`) are now cleared
+together whenever the ISIN DB is modified — single-entry add and bulk update
+both wire `.clear()` on both. Added 3 tests for the reverse index.
+
+### Banner styling cleanup
+
+Once banners showed Tickers (short strings, ~10 chars each), the original
+styling — `⚠` icon prefix, content on a new line in monospace — felt heavy.
+User asked to remove the icon and inline everything on a single line,
+content immediately after the colon. Done.
+
+Separately, the user asked to switch the `border-left: 3px solid <accent>`
+on every alert box across the app to `border-top: 3px solid <accent>`. Five
+boxes affected: the `.info-banner` CSS class, the p1_upload detection-error
+banner, the p1_validate "blocked rows still included" inline warning, and
+both p2_results warning banners. Same colours, same widths, only the
+accent edge moved.
+
+### Total Net 4dp
+
+User asked the Allocation Summary's `Total Net (₹)` column to display 4
+decimal places (formerly default pandas display ~6dp). Applied via Styler
+`format({"Total Net (₹)": "{:,.4f}"})`. Underlying allocation values are
+full precision; this is display-only.
+
+### Validate Orders column rename
+
+User requested "Available / Held" → "Bank Balance / Units Held" on the
+column that shows different content for BUYs (bank balance) vs SELLs (units
+held). The original label conflated the two; the new label spells out both
+sides. One-line change at app.py:1205. Internal session-state key
+(`"Units Held / Cash"`) untouched to avoid breaking the rest of the table
+plumbing.
+
+### Calculation logic explainer
+
+In the middle of this batch the user asked for a plain-English walk-through
+of the validation + allocation math. Captured as a chat response (not in
+the codebase) covering: sell validation against holdings, buy validation
+against bank balance minus committed cash, tolerance buffer, pooled
+broker execution, weight = client qty / total qty, charge split by weight,
+last-client residual rule with concrete examples of why it exists.
+
+### AWS EC2 hosting discussion
+
+User has an existing EC2 instance and wanted a guide for hosting the tool
+alongside whatever's already running, at zero additional cost. Two
+guides delivered — a thorough one (Nginx subdomain routing, HTTPS via
+Let's Encrypt, S3 backups, GitHub Actions auto-deploy, Basic Auth) and
+a stripped-down minimum (port 8501, systemd service, EC2 Security Group
+rule, ~10 minutes total). User opted for the minimum.
+
+### Data refresh
+
+Through the session the user added 13 new ISIN entries via the live app's
+bulk-update UI: 9 in commit `b540680` and 4 more after that which are
+still uncommitted at the time of writing. The tool's persistent state
+(`data/isin_database.csv`) drifts as ops uses the app — same as before, but
+worth flagging that the repo's CSV is only as fresh as the last commit.
+
+### What did NOT change this round
+
+- The validator, matcher, allocator, parser, writer modules — no business
+  logic touched
+- The Excel output files — only on-screen previews + summary tables
+  changed
+- The 86 pre-existing tests — all still pass; added 3 for the reverse
+  index, total now 89
+
+---
+
+*Last updated: after commit 9064de9*
