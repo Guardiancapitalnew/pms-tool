@@ -35,7 +35,7 @@ _TODAY = date.today().strftime("%d_%m_%Y")
 LOGO_PATH = pathlib.Path(__file__).parent / "assets" / "logo_transparent.png"
 
 st.set_page_config(
-    page_title="PMS Execution Tool - Guardian Capital",
+    page_title="PMS Execution - Guardian Capital",
     page_icon=str(LOGO_PATH) if LOGO_PATH.exists() else "📊",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -764,7 +764,7 @@ def nav():
             f'<div>'
             f'<div style="font-family:\'Cormorant Garamond\',Georgia,serif;'
             f'font-size:1.85rem;font-weight:600;color:#1C1714;line-height:1;'
-            f'letter-spacing:-0.25px;white-space:nowrap">PMS Execution Tool</div>'
+            f'letter-spacing:-0.25px;white-space:nowrap">PMS Execution</div>'
             f'<div style="font-family:\'DM Sans\',sans-serif;font-size:0.65rem;'
             f'color:#B0A89E;letter-spacing:1px;text-transform:uppercase;'
             f'font-weight:300;margin-top:5px">Guardian Capital</div>'
