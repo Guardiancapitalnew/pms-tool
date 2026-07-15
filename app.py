@@ -1162,8 +1162,8 @@ def p1_validate():
     if tolerance > 0:
         buy_mask  = vdf["Direction"] == "BUY"
         sell_mask = vdf["Direction"] == "SELL"
-        editor_df.loc[buy_mask,  "Value"] = editor_df.loc[buy_mask,  "Value"] * (1 + tolerance / 100)
-        editor_df.loc[sell_mask, "Value"] = editor_df.loc[sell_mask, "Value"] * (1 - tolerance / 100)
+        editor_df.loc[buy_mask,  "Value"] = (editor_df.loc[buy_mask,  "Value"] * (1 + tolerance / 100)).astype(float)
+        editor_df.loc[sell_mask, "Value"] = (editor_df.loc[sell_mask, "Value"] * (1 - tolerance / 100)).astype(float)
 
     editor_df.insert(0, "Include", vdf["Status"] == "GREEN")
 
