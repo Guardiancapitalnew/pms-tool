@@ -7,7 +7,6 @@ Both .xls and .xlsx formats are accepted for every file.
 from io import BytesIO
 
 import pandas as pd
-import xlrd
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +39,7 @@ def _get_sheet_rows(content: bytes, sheet_name: str) -> list[tuple]:
         list of row tuples
     """
     if _is_xls(content):
+        import xlrd
         wb = xlrd.open_workbook(file_contents=content)
         if sheet_name not in wb.sheet_names():
             raise ValueError(
@@ -205,6 +205,7 @@ def _get_research_sheet_rows(content: bytes) -> list[tuple]:
         ValueError: if no sheet with research columns is found
     """
     if _is_xls(content):
+        import xlrd
         wb = xlrd.open_workbook(file_contents=content)
         sheet_names = wb.sheet_names()
         get_rows = lambda name: [
@@ -447,6 +448,7 @@ def read_scrip_wise_report(file) -> pd.DataFrame:
 
     # Sheet name changes daily (first client's name) - always use first sheet
     if _is_xls(content):
+        import xlrd
         wb = xlrd.open_workbook(file_contents=content)
         ws = wb.sheet_by_index(0)
         rows = [
