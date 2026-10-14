@@ -143,7 +143,8 @@ def allocate_costs(
                 rec["InputNetAmount"] = round(w * broker_net, 2)
 
             # Net Rate - full precision
-            rec["InputNetRate"] = rec["InputNetAmount"] / int(row["Qty"])
+            qty_int = int(row["Qty"])
+            rec["InputNetRate"] = rec["InputNetAmount"] / qty_int if qty_int != 0 else 0.0
 
             group_records.append(rec)
 

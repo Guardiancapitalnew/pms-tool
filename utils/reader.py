@@ -223,7 +223,7 @@ def _get_research_sheet_rows(content: bytes) -> list[tuple]:
         return get_rows("Orders")
 
     # Scan all sheets - pick the one with the most alias matches in first 10 rows
-    best_sheet, best_score = None, 0
+    best_sheet, best_score, best_rows = None, 0, []
     for name in sheet_names:
         rows = get_rows(name)
         score = 0
@@ -381,7 +381,7 @@ def read_bank_book(file) -> dict[str, float]:
 
     for i, row in enumerate(rows):
         row_vals = [str(v).strip() if v is not None else "" for v in row]
-        if "OFIN Code" in row_vals:
+        if "OFIN Code" in row_vals and "Balance" in row_vals:
             header_row_idx = i
             ofin_col = row_vals.index("OFIN Code")
             balance_col = row_vals.index("Balance")
