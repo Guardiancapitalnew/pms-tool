@@ -75,9 +75,8 @@ def _pd_read_excel(content: bytes, sheet_name: str, **kwargs) -> pd.DataFrame:
     Returns:
         pd.DataFrame
     """
-    engine = "xlrd" if _is_xls(content) else "openpyxl"
     return pd.read_excel(BytesIO(content), sheet_name=sheet_name,
-                         engine=engine, **kwargs)
+                         engine="openpyxl", **kwargs)
 
 
 def _normalise_ofin(series: pd.Series) -> pd.Series:
